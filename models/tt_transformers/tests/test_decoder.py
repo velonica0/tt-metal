@@ -60,7 +60,7 @@ def test_decoder_inference(
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -71,7 +71,7 @@ def test_decoder_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
     reference_model = model_args.reference_decoder()
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict(partial_state_dict, fuse_qkv=model_args.fuse_qkv, fuse_mlp=model_args.fuse_mlp)
 
     generation_start_pos = 0
     generation_length = 10
@@ -86,6 +86,7 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling_factor,
         model_args.orig_context_len,
+        ext_scaling_tensor=model_args.rope_ext_scaling_tensor,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
 
@@ -137,6 +138,7 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling_factor,
         model_args.orig_context_len,
+        ext_scaling_tensor=model_args.rope_ext_scaling_tensor,
     )
     freqs_cis = torch.complex(cos, sin)
 

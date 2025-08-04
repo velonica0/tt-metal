@@ -137,9 +137,7 @@ def test_tt_model_acc(
         optimizations = request.config.getoption("--optimizations") or optimizations
 
     # Load model args and tokenizer
-    model_args = ModelArgs(
-        mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True
-    )
+    model_args = ModelArgs(mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len)
     logger.info(f"Optimizations: {model_args.optimizations._full_name}")
 
     tokenizer = model_args.tokenizer
@@ -244,6 +242,7 @@ def test_tt_model_acc(
             model_args.rope_theta,
             model_args.rope_scaling_factor,
             model_args.orig_context_len,
+            ext_scaling_tensor=model_args.rope_ext_scaling_tensor,
         )
 
         prefill_input = model_args.prepare_residual_tensor_prefill(

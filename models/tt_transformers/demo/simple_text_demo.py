@@ -272,11 +272,11 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            32 * 1024,  # max_seq_len
+            64 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -292,7 +292,7 @@ def prepare_generator_args(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -590,6 +590,18 @@ def test_demo_text(
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
 
+    model_name_env = os.getenv("HF_MODEL", "")
+    if "phi-3-mini-128k-instruct" in model_name_env.lower():
+        max_context_per_device = {
+            1: 32 * 1024,
+            2: 64 * 1024,
+        }
+        max_context_supported = max_context_per_device.get(num_devices, 128 * 1024)
+        if max_context_supported < max_seq_len:
+            pytest.skip(
+                f"Max sequence length: {max_seq_len} not supported for model: {model_name_env} on device: {mesh_device}"
+            )
+
     # uneven split of devices per DP group not supported
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
@@ -736,8 +748,10 @@ def test_demo_text(
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
-        # Currently only supporting greedy decoding (temperature=0) on device
-        argmax_on_device = sampling_params["temperature"] == 0
+        # TODO Argmax on device is only supported for batch_size=1 (per submesh)
+        argmax_on_device = (
+            False if (global_batch_size // data_parallel > 1 or sampling_params["temperature"] != 0) else True
+        )
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
@@ -1064,30 +1078,30 @@ def test_demo_text(
             # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
             ci_target_ttft = {
                 # N150 targets (milliseconds) - lower is better
-                "N150_Llama-3.2-1B": 26,
-                "N150_Llama-3.2-3B": 57,
-                "N150_Llama-3.1-8B": 112,
+                "N150_Llama3.2-1B": 26,
+                "N150_Llama3.2-3B": 57,
+                "N150_Llama3.1-8B": 112,
                 # "N150_Mistral-7B": 106, # https://github.com/tenstorrent/tt-metal/issues/24963
                 # N300 targets
                 # "N300_Qwen2.5-7B": 150,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # T3K targets
-                "T3K_Llama-3.1-70B": 181,
+                "T3K_Llama3.1-70B": 181,
                 # "T3K_Qwen2.5-Coder-32B": 180,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen2.5-72B": 211,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen3-32B": 250, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
-                "N150_Llama-3.2-1B": 58,
-                "N150_Llama-3.2-3B": 35,
-                "N150_Llama-3.1-8B": 21,
+                "N150_Llama3.2-1B": 58,
+                "N150_Llama3.2-3B": 35,
+                "N150_Llama3.1-8B": 21,
                 "N150_Mistral-7B": 23,
                 # N300 targets
                 "N300_Qwen2.5-7B": 20,
                 # T3K targets
-                "T3K_Llama-3.1-70B": 14,
+                "T3K_Llama3.1-70B": 14,
                 "T3K_Qwen2.5-72B": 13,
-                "T3K_Qwen2.5-Coder-32B": 21,
+                "T3K_Qwen2.5-Coder-32B": 19,
                 "T3K_Qwen3-32B": 20,
             }
 

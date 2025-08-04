@@ -12,7 +12,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 def test_torch_inference(ensure_gc):
     iterations = 20
 
-    model_args = ModelArgs(mesh_device=None, cache_hf=True)
+    model_args = ModelArgs(mesh_device=None)
     state_dict = model_args.load_state_dict()
     tokenizer = model_args.tokenizer
 
@@ -20,7 +20,7 @@ def test_torch_inference(ensure_gc):
     encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
     reference_model = model_args.reference_transformer()
-    reference_model.load_state_dict(state_dict)
+    reference_model.load_state_dict(state_dict, fuse_qkv=model_args.fuse_qkv, fuse_mlp=model_args.fuse_mlp)
 
     # Embedding on host
     embd = model_args.reference_embedding()
