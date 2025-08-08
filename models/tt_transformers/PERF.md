@@ -47,7 +47,7 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Mistral-7B        | T3K         | 95        | 99        | 67.82         | 53.93     |
 | Phi-3-mini-128k-instruct | N150        | 90        | 99        | 45.6          | 72.8      |
 | Phi-3-mini-128k-instruct | N300        | 89        | 98        | 59.5          | 57.9      |
-| phi-4             | N300        | 94        | 99        | 27.05         | 221.95    |
+| phi-4             | N300        | 89.50     | 99        | 28.85         | 452.48    |
 
 
 ## Accuracy
