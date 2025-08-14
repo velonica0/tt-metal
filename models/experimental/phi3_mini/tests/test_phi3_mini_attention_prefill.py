@@ -1,18 +1,20 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-
-import pytest
 import torch
+import pytest
 from loguru import logger
-
+import os
 import ttnn
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tt.attention import Attention
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, get_rot_transformation_mat
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.utility_functions import (
+    comp_pcc,
+    comp_allclose,
+)
+from models.utility_functions import skip_for_grayskull
+from models.experimental.phi3_mini.tt.model_config import Phi3MiniModelArgs
+from models.experimental.phi3_mini.tt.phi3_mini_common import get_prefill_rot_mat
+from models.tt_transformers.tt.common import get_rot_transformation_mat, PagedAttentionConfig
 
 
 @torch.no_grad()
@@ -55,6 +57,7 @@ def test_attention_inference(
     paged_attention,
     page_params,
     mesh_device,
+    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):
@@ -62,17 +65,11 @@ def test_attention_inference(
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    model_args = Phi3MiniModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("Attention", 0) + "."
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
     reference_model = model_args.reference_attention()
-    reference_model.load_state_dict(partial_state_dict, model_args.fuse_qkv)
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(
@@ -81,8 +78,9 @@ def test_attention_inference(
         max_seq_len,
         model_args.rope_theta,
         model_args.rope_scaling_factor,
+        model_args.rope_scaling,
         model_args.orig_context_len,
-        ext_scaling_tensor=model_args.rope_ext_scaling_tensor,
+        start_pos=0,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
 
@@ -135,7 +133,7 @@ def test_attention_inference(
         paged_attention_config=paged_attention_config,
     )
 
-    pt_attention_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
+    pt_attention_input = torch.rand(batch_size, max_seq_len, model_args.dim)
     tt_attention_input = pt_attention_input.clone()
     attention_input = model_args.prepare_residual_tensor_prefill(
         tt_attention_input,
@@ -155,15 +153,9 @@ def test_attention_inference(
     )
     tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, max_seq_len, -1)  # [ batch, seq, hidden_dim]
     positions = torch.LongTensor(range(max_seq_len))
-    freqs_cis_i = precompute_freqs_cis(
-        model_args.head_dim,
-        model_args.max_seq_len * 2,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-    )[positions]
     attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
     attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-    reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
+    reference_output = reference_model(pt_attention_input, positions[0], None, mask=attn_mask_torch)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 

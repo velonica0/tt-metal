@@ -1,18 +1,20 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import bz2
-import os
-from pathlib import Path
-
-import pytest
 import torch
+import bz2
+import pytest
 from loguru import logger
-
+import os
 import ttnn
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, preprocess_inputs_prefill
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
+from models.tt_transformers.tt.common import (
+    PagedAttentionConfig,
+)
+from models.experimental.phi3_mini.tt.phi3_mini_common import get_prefill_rot_mat, preprocess_inputs_prefill
+from models.experimental.phi3_mini.tt.phi3_mini_model import Phi3Transformer as Transformer
+from models.tt_transformers.tt.model_config import DecodersPrecision, parse_decoder_json
+from models.experimental.phi3_mini.tt.model_config import Phi3MiniModelArgs
+from pathlib import Path
 
 
 def get_accuracy_thresholds(model_args, optimizations):
@@ -30,7 +32,7 @@ def get_accuracy_thresholds(model_args, optimizations):
     target_section = next(s for s in sections if s.lower().startswith(f"{first_decoder_conf.__name__}\n"))
 
     # Parse the table and find the row for our model and device
-    # Potential lines have the form "| Llama-3.1-8b    | T3K    | 91        | 99        | 49.8          |"
+    # Potential lines have the form "| Llama3.1-8b    | T3K    | 91        | 99        | 49.8          |"
     base_model_name = model_args.base_model_name
     device_name = model_args.device_name
     correct_line = (
@@ -61,7 +63,7 @@ def get_accuracy_thresholds(model_args, optimizations):
 
 
 @torch.no_grad()
-@pytest.mark.timeout(1200)
+@pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
     ((512, 511, 1024),),
@@ -120,6 +122,7 @@ def test_tt_model_acc(
     optimizations,
     mesh_device,
     use_reference_file,
+    use_program_cache,
     reset_seeds,
     ensure_gc,
     is_ci_env,
@@ -137,8 +140,8 @@ def test_tt_model_acc(
         optimizations = request.config.getoption("--optimizations") or optimizations
 
     # Load model args and tokenizer
-    model_args = ModelArgs(
-        mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True
+    model_args = Phi3MiniModelArgs(
+        mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len
     )
     logger.info(f"Optimizations: {model_args.optimizations._full_name}")
 
@@ -150,10 +153,10 @@ def test_tt_model_acc(
     logger.info("Finished loading weights...")
 
     # Load the reference data
-
     if use_reference_file:
         # Existing reference file loading logic
-        reference_data_file = f"models/tt_transformers/tests/reference_outputs/{model_args.model_name}.refpt"
+        current_file_path = os.path.dirname(os.path.abspath(__file__))
+        reference_data_file = os.path.join(current_file_path, f"reference_output/{model_args.model_name}.refpt")
         logger.info(f"Loading reference data from {reference_data_file}")
         assert os.path.exists(reference_data_file)
         reference_data = torch.load(reference_data_file)
@@ -240,11 +243,12 @@ def test_tt_model_acc(
         rot_mats_prefill = get_prefill_rot_mat(
             model_args.head_dim,
             mesh_device,
-            prefill_lens[0],
+            max_seq_len,
             model_args.rope_theta,
             model_args.rope_scaling_factor,
+            model_args.rope_scaling,
             model_args.orig_context_len,
-            ext_scaling_tensor=model_args.rope_ext_scaling_tensor,
+            start_pos=0,
         )
 
         prefill_input = model_args.prepare_residual_tensor_prefill(
@@ -433,7 +437,7 @@ def test_tt_model_acc(
     total_top1_acc = 100 * sum(top1_correct) / num_tokens
     total_top5_acc = 100 * sum(top5_correct) / num_tokens
     logger.info(
-        f"Total tokens {num_tokens}: Top-1 accuracy: {total_top1_acc:3.1f} %, Top-5 accuracy: {total_top5_acc:3.1f} %"
+        f"Total tokens {num_tokens}: Top-1 accuracy: {total_top1_acc:3.0f} %, Top-5 accuracy: {total_top5_acc:3.0f} %"
     )
 
     # Only show error summary when using reference files
@@ -454,8 +458,6 @@ def test_tt_model_acc(
                 logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
 
     if use_reference_file:
-        logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
-
         if not json_config_file:
             # Get accuracy thresholds from PERF.md, unless the configuration is from a json
             min_top1_acc, min_top5_acc = get_accuracy_thresholds(
@@ -468,3 +470,5 @@ def test_tt_model_acc(
             assert (
                 total_top5_acc >= min_top5_acc
             ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
+
+        logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")

@@ -1,18 +1,20 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
-
-import pytest
 import torch
+import pytest
 from loguru import logger
-
+import os
 import ttnn
 from models.tt_transformers.tt.attention import Attention
-from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
-from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.rope import RotarySetup
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.experimental.phi3_mini.tt.phi3_mini_rope import Phi3MiniRotarySetup
+from models.experimental.phi3_mini.tt.model_config import Phi3MiniModelArgs
+from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.utility_functions import (
+    comp_pcc,
+    comp_allclose,
+)
+from models.utility_functions import skip_for_grayskull
 
 
 @torch.no_grad()
@@ -55,25 +57,18 @@ def test_attention_inference(
     paged_attention,
     page_params,
     mesh_device,
+    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    model_args = Phi3MiniModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
-
-    first_layer_prefix = model_args.get_state_dict_prefix("Attention", 0) + "."
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-
     reference_model = model_args.reference_attention()
-    reference_model.load_state_dict(partial_state_dict, model_args.fuse_qkv)
 
     seq_len = 1
 
@@ -81,16 +76,16 @@ def test_attention_inference(
     generation_length = 10
     all_tests_pass = True
 
-    # Setup RoPE transformation matrices
-    rope_setup = RotarySetup(
-        mesh_device,
-        batch_size,
-        model_args.head_dim,
-        model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
-        ext_scaling_tensor=model_args.rope_ext_scaling_tensor,
+    rope_setup = Phi3MiniRotarySetup(
+        device=mesh_device,
+        batch_size=batch_size,
+        head_dim=model_args.head_dim,
+        max_seq_len=max_seq_len,
+        rope_theta=model_args.rope_theta,
+        scale_factor=model_args.rope_scaling_factor,
+        ext_scale_tensors=model_args.rope_scaling,
+        orig_context_len=model_args.orig_context_len,
+        datatype=ttnn.bfloat16,
     )
 
     transformation_mats = rope_setup.get_both_trans_mats()
@@ -134,16 +129,6 @@ def test_attention_inference(
         paged_attention_config=paged_attention_config,
     )
 
-    cos, sin = precompute_freqs(
-        model_args.head_dim,
-        model_args.max_seq_len * 2,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
-        ext_scaling_tensor=model_args.rope_ext_scaling_tensor,
-    )
-    freqs_cis = torch.complex(cos, sin)
-
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
     current_pos_tensor = ttnn.from_torch(
@@ -158,8 +143,7 @@ def test_attention_inference(
     )
 
     for i in range(generation_length):
-        # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
-        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim)  # Qwen2.5 0.5B sees 0.1 to 2.1
+        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim)
 
         tt_attention_input = pt_attention_input.clone()
 
@@ -186,10 +170,7 @@ def test_attention_inference(
         )
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 
-        # In this test all users have the same position (if using batch > 1)
-        freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
-
-        reference_output = reference_model(pt_attention_input, current_pos[0], freqs_cis_i, mask=None)
+        reference_output = reference_model(pt_attention_input, current_pos[0], None, mask=None)
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
