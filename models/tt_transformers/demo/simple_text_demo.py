@@ -272,11 +272,11 @@ def prepare_generator_args(
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            64 * 1024,  # max_seq_len
+            32 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -292,7 +292,7 @@ def prepare_generator_args(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
