@@ -1,11 +1,16 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+
 #include "helper_funcs.h"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <torch/torch.h>
 #include <vector>
 #include <stdexcept>
-#include <opencv2/opencv.hpp>
 
 namespace helper_funcs {
 
@@ -17,18 +22,18 @@ ttnn::Tensor linear_transform(
 ) {
     // Transpose weight for matrix multiplication
     auto weight_transposed = ttnn::transpose(weight, -2, -1);
-    
+
     // // Perform matrix multiplication
     // auto output = ttnn::matmul(input, weight_transposed);
-    
+
     // Add bias if provided
-    if (bias.has_value() && bias->get_layout() != ttnn::TILE_LAYOUT) {
-        bias = ttnn::to_layout(bias.value(), ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (ttnn::MeshDevice*)nullptr);
+    if (bias.has_value() && bias->layout() != ttnn::TILE_LAYOUT) {
+        bias = ttnn::to_layout(bias.value(), ttnn::TILE_LAYOUT, std::nullopt, std::nullopt);
     }
-    
+
     // Perform linear transformation
     auto output = ttnn::linear(input, weight_transposed, bias, false, false, output_mem_config);
-    
+
     return output;
 }
 
@@ -45,25 +50,25 @@ ttnn::Tensor torch_to_tt_tensor_tile(
         // Convert at::IntArrayRef to std::vector<int64_t>
         auto tensor_sizes = tensor.sizes();
         target_shape = std::vector<int64_t>(tensor_sizes.begin(), tensor_sizes.end());
-        
+
         // Ensure at least 4 dimensions by padding with 1s at the beginning
         while (target_shape.size() < 4) {
             target_shape.insert(target_shape.begin(), 1);
         }
     }
-    
+
     // Reshape tensor to target shape
     at::Tensor reshaped_tensor = tensor.reshape(target_shape);
-    
+
     // Ensure tensor is contiguous
     at::Tensor contiguous_tensor = reshaped_tensor.contiguous();
-    
+
     // Create logical shape for ttnn
     ttnn::Shape logical_shape(std::vector<uint32_t>{target_shape.begin(), target_shape.end()});
-    
+
     ttnn::Tensor tt_tensor = from_torch(contiguous_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE);
     tt_tensor = tt_tensor.to_device(device.get());
-    
+
     // Move tensor to device - use the same approach as from_torch function
     return tt_tensor;
 }
@@ -76,40 +81,33 @@ ttnn::Tensor create_concrete(torch::Tensor &contiguous_tensor, tt::tt_metal::Ten
             spec);
 }
 
+
 template <typename T>
 tt::tt_metal::HostBuffer create_row_major_host_buffer(
     tt::tt_metal::HostBuffer host_buffer, const tt::tt_metal::TensorSpec& tensor_spec, const bool padded_output) {
-    assert((!tensor_spec.memory_config().is_sharded() || tensor_spec.memory_config().shard_spec.has_value()) &&
-        "Sharded tensors must have a shard spec when converting to tt tensors!");
-
     if (padded_output) {
         if (tensor_spec.layout() == ttnn::Layout::TILE) {
-            auto data = tt::tt_metal::tensor_impl::convert_layout_tile_to_row_major(
-                tensor_spec.physical_shape(), tensor_spec.tile(), tt::stl::MakeConstSpan(host_buffer.view_as<T>()));
-            return tt::tt_metal::host_buffer::create(std::move(data));
+            auto row_major_data = tt::tt_metal::tensor_impl::convert_layout_tile_to_row_major(
+                tensor_spec.physical_shape(), tensor_spec.tile(), host_buffer.view_as<const T>());
+            return tt::tt_metal::HostBuffer(std::move(row_major_data));
         }
         return host_buffer;
     }
 
     // No modifications needed; direclty return buffer
-    if (tensor_spec.layout() == ttnn::Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape()) {
+    if (tt::tt_metal::tensor_impl::logical_matches_physical(tensor_spec)) {
         return host_buffer;
     }
 
-    // TODO: Switch to use span in decode_tensor_data and avoid data copy here
-    auto typed_view = tt::tt_metal::host_buffer::get_as<T>(host_buffer);
-    std::vector<T> physical_data(typed_view.begin(), typed_view.end());
-
-    // See implementation for documentation
-    auto logical_data = tt::tt_metal::tensor_impl::decode_tensor_data<T>(std::move(physical_data), tensor_spec);
-
-    return tt::tt_metal::host_buffer::create<T>(std::move(logical_data));
+    auto logical_data = tt::tt_metal::tensor_impl::decode_tensor_data(host_buffer.view_as<const T>(), tensor_spec);
+    return tt::tt_metal::HostBuffer(std::move(logical_data));
 }
 
-tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tensor, const bool padded_output) {
-    TT_ASSERT(is_cpu_tensor(tt_tensor) || is_multi_device_host_tensor(tt_tensor), "Tensor must be on host for padding");
 
-    const auto& tensor_spec = tt_tensor.get_tensor_spec();
+tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tensor, const bool padded_output) {
+    TT_ASSERT(tt::tt_metal::is_cpu_tensor(tt_tensor), "Tensor must be on host for padding");
+
+    const auto& tensor_spec = tt_tensor.tensor_spec();
     auto convert_to_logical = [&tensor_spec, padded_output](const tt::tt_metal::HostBuffer& buffer) {
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
@@ -140,7 +138,7 @@ tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tens
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
                                                : unpack_bfp4_tiles_into_float_vec(
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                auto input_float_buffer = tt::tt_metal::host_buffer::create<float>(std::move(float_unpacked_data));
+                auto input_float_buffer = tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
                 return create_row_major_host_buffer<float>(input_float_buffer, tensor_spec, padded_output);
             }
             default: {
@@ -150,33 +148,29 @@ tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tens
         }
     };
 
-    auto copy_if_borrowed = [](const tt::tt_metal::HostBuffer& buffer) {
-        if (buffer.is_borrowed()) {
-            return buffer.deep_copy();
-        }
-        return buffer;
-    };
-
-    return copy_if_borrowed(convert_to_logical(std::visit(
+    return convert_to_logical(std::visit(
         tt::stl::overloaded{
-            [](const tt::tt_metal::HostStorage& storage) { return storage.buffer; },
-            [](const tt::tt_metal::MultiDeviceHostStorage& storage) {
-                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
-                return storage.buffers[0];
+            [](const tt::tt_metal::HostStorage& storage) {
+                std::vector<tt::tt_metal::HostBuffer> buffers;
+                storage.buffer().apply([&buffers](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
+                TT_FATAL(
+                    buffers.size() == 1,
+                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh composer "
+                    "to concatenate multi-device shards.",
+                    storage.buffer().shape());
+                return buffers.front();
             },
             [&tt_tensor](auto&&) -> tt::tt_metal::HostBuffer {
                 TT_THROW(
                     "Tensor with {} cannot be converted to torch",
-                    tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
+                    tt::stl::get_active_type_name_in_variant(tt_tensor.storage()));
             },
         },
-        tt_tensor.get_storage())));
+        tt_tensor.storage()));
 }
 
-
-
 ttnn::Tensor from_torch(const at::Tensor& tensor,
-    std::optional<ttnn::DataType> dtype,    
+    std::optional<ttnn::DataType> dtype,
     std::optional<ttnn::Layout> layout) {
     auto torch_dtype = tensor.scalar_type();
     auto torch_shape = tensor.sizes();
@@ -201,13 +195,13 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
     } else if (torch_dtype == torch::kUInt8) {
         data_type = ttnn::DataType::UINT8;
     } else {
-        TT_THROW("from_torch Unsurport type : {}", c10::toString(torch_dtype));
+        TT_THROW("from_torch Unsupported type : {}", c10::toString(torch_dtype));
     }
 
     if (data_type == ttnn::DataType::BFLOAT8_B || data_type == ttnn::DataType::BFLOAT4_B) {
-        throw std::runtime_error("from_torch: bfloat8_b/bfloat4_b unsurport!");
+        throw std::runtime_error("from_torch: bfloat8_b/bfloat4_b unsupported!");
     }
-    
+
     torch::Tensor contiguous_tensor = tensor.contiguous();
     auto maybe_convert_tensor_dtype = [&torch_dtype, &contiguous_tensor](c10::ScalarType target_py_dtype) {
         if (torch_dtype != target_py_dtype) {
@@ -215,7 +209,7 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
         }
     };
 
-    auto tensor_spec = tt::tt_metal::TensorSpec(logical_shape, 
+    auto tensor_spec = tt::tt_metal::TensorSpec(logical_shape,
                                 tt::tt_metal::TensorLayout(data_type, tt::tt_metal::PageConfig(layout.value_or(ttnn::Layout::ROW_MAJOR)),
                                                             ttnn::MemoryConfig{})
                                 );
@@ -243,7 +237,7 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
         case ttnn::DataType::BFLOAT16: {
             maybe_convert_tensor_dtype(at::kBFloat16);
             return create_concrete<bfloat16>(contiguous_tensor, tensor_spec);
-        }        
+        }
         case ttnn::DataType::BFLOAT8_B:
         case ttnn::DataType::BFLOAT4_B: {
             maybe_convert_tensor_dtype(at::kFloat);
@@ -256,10 +250,10 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
 }
 
 torch::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output) {
-    auto logical_shape = tensor.get_logical_shape();
+    auto logical_shape = tensor.logical_shape();
     auto data_type = tensor.dtype();
     auto torch_dtype = torch::kFloat;
-    auto tensor_spec = tensor.get_tensor_spec();
+    auto tensor_spec = tensor.tensor_spec();
     auto view = logical_shape.view();
     std::vector<int64_t> torch_shape(view.begin(), view.end());
 
@@ -308,12 +302,13 @@ torch::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output) {
     torch_tensor.copy_(torch::from_blob(data_ptr, torch_shape, at::TensorOptions().dtype(torch_dtype).requires_grad(false)));
     // If the tensor is padded, we need to reshape it to the padded shape
     if (padded_output) {
-        auto shape = tensor.get_padded_shape();
+        auto shape = tensor.padded_shape();
         torch_shape = std::vector<int64_t>{shape.cbegin(), shape.cend()};
     }
     torch_tensor = torch_tensor.reshape(torch_shape);
     return torch_tensor.contiguous();
 }
+
 
 ttnn::Tensor apply_layernorm(
     const ttnn::Tensor& input,
@@ -325,56 +320,27 @@ ttnn::Tensor apply_layernorm(
     return ttnn::layer_norm(input, eps, weight, bias);
 }
 
+
 /**
- * Load and preprocess image for DeiT model inference
- * Mimics the functionality of AutoImageProcessor from transformers
- * 
- * @param image_path Path to the input image file
- * @param device Target mesh device for tensor operations
- * @return Preprocessed image tensor [1, 3, 224, 224] ready for DeiT inference
+ * Compute Pearson Correlation Coefficient (PCC) between two tensors
+ * @param tensor1 First tensor
+ * @param tensor2 Second tensor
+ * @return PCC value
  */
-torch::Tensor load_and_preprocess_image(
-    const std::string& image_path
-) {
-    // Load image using OpenCV
-    cv::Mat image = cv::imread(image_path, cv::IMREAD_COLOR);
-    if (image.empty()) {
-        throw std::runtime_error("Failed to load image from path: " + image_path);
-    }
-    
-    // Convert BGR to RGB (OpenCV loads as BGR by default)
-    cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
-    
-    // Resize to 224x224 (DeiT input size)
-    cv::Mat resized_image;
-    cv::resize(image, resized_image, cv::Size(224, 224), 0, 0, cv::INTER_LINEAR);
-    
-    // Convert to float and normalize to [0, 1]
-    cv::Mat float_image;
-    resized_image.convertTo(float_image, CV_32F, 1.0/255.0);
-    
-    // Create torch tensor from OpenCV Mat
-    // Shape: [H, W, C] -> [C, H, W]
-    torch::Tensor tensor = torch::from_blob(
-        float_image.data, 
-        {224, 224, 3}, 
-        torch::kFloat32
-    ).clone();
-    
-    // Permute dimensions from HWC to CHW
-    tensor = tensor.permute({2, 0, 1});
-    
-    // Apply ImageNet normalization
-    // Mean: [0.485, 0.456, 0.406], Std: [0.229, 0.224, 0.225]
-    torch::Tensor mean = torch::tensor({0.485, 0.456, 0.406}).view({3, 1, 1});
-    torch::Tensor std = torch::tensor({0.229, 0.224, 0.225}).view({3, 1, 1});
-    tensor = (tensor - mean) / std;
-    
-    // Add batch dimension: [C, H, W] -> [1, C, H, W]
-    tensor = tensor.unsqueeze(0);
-    
-    // Return torch tensor directly
-    return tensor;
+double compute_pcc(const torch::Tensor& tensor1, const torch::Tensor& tensor2) {
+    auto flat1 = tensor1.flatten().to(torch::kFloat32);
+    auto flat2 = tensor2.flatten().to(torch::kFloat32);
+
+    auto mean1 = flat1.mean();
+    auto mean2 = flat2.mean();
+
+    auto centered1 = flat1 - mean1;
+    auto centered2 = flat2 - mean2;
+
+    auto numerator = (centered1 * centered2).sum();
+    auto denominator = torch::sqrt((centered1 * centered1).sum() * (centered2 * centered2).sum());
+
+    return numerator.item<double>() / denominator.item<double>();
 }
 
 } // namespace helper_funcs

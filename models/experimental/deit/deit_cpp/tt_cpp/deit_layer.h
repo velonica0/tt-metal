@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+
 #ifndef DEIT_CPP_TT_CPP_DEIT_LAYER_H
 #define DEIT_CPP_TT_CPP_DEIT_LAYER_H
 
@@ -18,7 +23,7 @@
 /**
  * TtDeiTLayer class - C++ implementation of DeiT layer (Block)
  * Equivalent to the Python TtDeiTLayer class
- * 
+ *
  * This layer combines attention, intermediate, and output modules with layer normalization.
  * It implements the transformer block with pre-norm architecture used in DeiT.
  */
@@ -60,12 +65,12 @@ private:
     // Configuration and device
     DeiTConfig config;
     std::shared_ptr<ttnn::MeshDevice> device;
-    
+
     // Sub-modules
     std::unique_ptr<TtDeiTAttention> attention;
     std::unique_ptr<TtDeiTIntermediate> intermediate;
     std::unique_ptr<TtDeiTOutput> output;
-    
+
     // Layer normalization parameters
     ttnn::Tensor layernorm_before_weight;
     ttnn::Tensor layernorm_before_bias;

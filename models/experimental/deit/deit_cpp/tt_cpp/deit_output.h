@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+
 #ifndef DEIT_CPP_TT_CPP_DEIT_OUTPUT_H
 #define DEIT_CPP_TT_CPP_DEIT_OUTPUT_H
 
@@ -13,7 +18,7 @@
 /**
  * TtDeiTOutput class - C++ implementation of DeiT output layer
  * Equivalent to the Python TtDeiTOutput class
- * 
+ *
  * This layer applies a linear transformation to reduce the intermediate dimension
  * back to hidden_size and adds a residual connection.
  */
@@ -50,7 +55,7 @@ private:
     // Configuration and device
     DeiTConfig config;
     std::shared_ptr<ttnn::MeshDevice> device;
-    
+
     // Dense layer parameters
     ttnn::Tensor dense_weight;
     std::optional<ttnn::Tensor> dense_bias;
