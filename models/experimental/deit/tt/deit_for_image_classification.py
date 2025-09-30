@@ -10,7 +10,7 @@ import ttnn
 
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_model import TtDeiTModel
-from models.helper_funcs import Linear as TtLinear
+from models.common.helper_funcs import Linear as TtLinear
 from models.utility_functions import (
     torch_to_tt_tensor_tile,
 )
@@ -80,9 +80,7 @@ def _deit_for_image_classification(device, config, state_dict, base_address="") 
 
 
 def deit_for_image_classification(device) -> TtDeiTForImageClassification:
-    torch_model = DeiTForImageClassification.from_pretrained(
-        "/home/openkylin/.cache/huggingface/hub/models--facebook--deit-base-distilled-patch16-224/snapshots/155831199e645cc8ec9ace65a38ff782be6217e1"
-    )
+    torch_model = DeiTForImageClassification.from_pretrained("facebook/deit-base-distilled-patch16-224")
     config = torch_model.config
     state_dict = torch_model.state_dict()
     tt_model = _deit_for_image_classification(device=device, config=config, state_dict=state_dict)
