@@ -148,6 +148,7 @@ void kernel_main() {
                 Determine how many rows of Q will be read. Both start and end rows are
                 capped by valid_Sqt, since Sq padding is independent of Sk padding.
                 */
+                // 第一个同步点：将Q/K存入到L1缓冲区，在compute kernel中进行同步等待。
                 const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
                 const uint32_t q_row_end_tile = std::min(q_row_start_tile + Sq_chunk_t, valid_Sqt);
                 const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
@@ -238,6 +239,7 @@ void kernel_main() {
                         cb_push_back(cb_mask_in, mask_chunk_tiles);
                     }
 
+                    // 第二个同步点，在读取V的时候进行同步。read_chunk_with_padding内部包含cb_reserve_back，会等待两个V_chunk消耗。
                     if constexpr (is_chunked) {
                         // Use page table to read V chunk
                         const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;

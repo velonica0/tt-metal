@@ -203,6 +203,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
+    // double buffer在read_chunk_with_padding函数中实现，K/V矩阵会等待两倍大小消耗，实现了流水线
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
