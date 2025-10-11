@@ -58,3 +58,7 @@ void MAIN {
     }
 }
 }  // namespace NAMESPACE
+
+// cb_reserve_back + noc_async_read_tile 的作用：这个组合用于数据流内核(BRISC / NCRISC) 将数据从 DRAM 写入到循环缓冲区
+
+// tile_regs_acquire + copy_tile 的作用：这个组合用于计算内核(TRISC)将数据从循环缓冲区加载到 FPU/SFPU 的计算寄存器

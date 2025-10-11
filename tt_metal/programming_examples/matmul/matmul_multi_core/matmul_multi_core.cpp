@@ -217,6 +217,7 @@ void matmul_multi_core(
     uint32_t work_offset = 0;
     auto work_groups = {std::make_pair(core_group_1, work_per_core1), std::make_pair(core_group_2, work_per_core2)};
 
+    // for循环设置所有tensix的动态参数，动态参数告知tensix需要处理哪些tile
     // Iterate through each work group and assign work to cores
     for (const auto& [ranges, work_per_core] : work_groups) {
         for (const auto& range : ranges.ranges()) {

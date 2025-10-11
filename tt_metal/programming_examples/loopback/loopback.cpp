@@ -53,9 +53,10 @@ int main() {
             .page_size = tile_size_bytes, .buffer_type = tt::tt_metal::BufferType::L1};  // This time we allocate on L1
 
         distributed::ReplicatedBufferConfig dram_buffer_config{
+            // DRAM大小是50tiles
             .size = dram_buffer_size};  // Size per device (replicated across mesh). Since we are operating on a unit
                                         // mesh this is the total size.
-        distributed::ReplicatedBufferConfig l1_buffer_config{.size = tile_size_bytes};
+        distributed::ReplicatedBufferConfig l1_buffer_config{.size = tile_size_bytes};  // L1大小是1tile
 
         // Allocate the buffers (replicated across mesh; on unit mesh ⇒ single device allocation)
         auto l1_buffer = distributed::MeshBuffer::create(l1_buffer_config, l1_config, mesh_device.get());
@@ -91,6 +92,7 @@ int main() {
                 .compile_args = dram_copy_compile_time_args});
 
         // Initialize the input buffer with random data.
+        // 随机生成输入数据，发送至DRAM
         std::vector<bfloat16> input_vec(elements_per_tile * num_tiles);
         std::mt19937 rng(std::random_device{}());
         std::uniform_real_distribution<float> distribution(0.0f, 100.0f);
@@ -103,6 +105,7 @@ int main() {
         // upload is complete. This is useful for performance reasons, as it allows the host to continue while the
         // upload is in progress. Note that the host is responsible for ensuring that the upload is complete before the
         // memory holding the data is freed.
+        // 上传数据到DRAM
         distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, /*blocking=*/false);
 
         // Set runtime arguments for the kernel.

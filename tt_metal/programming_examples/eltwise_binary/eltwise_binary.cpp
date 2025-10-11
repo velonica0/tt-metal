@@ -118,19 +118,19 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> reader_compile_time_args;
         TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
         TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
-        auto reader = CreateKernel(
+        auto reader = CreateKernel(     // BRISC
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/read_tiles.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
         std::vector<uint32_t> writer_compile_time_args;
         TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
-        auto writer = CreateKernel(
+        auto writer = CreateKernel(      // NRISC
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/write_tile.cpp",
             core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
-        auto compute = CreateKernel(
+        auto compute = CreateKernel(    // TRISC
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp",
             core,

@@ -110,11 +110,15 @@ inline float check_bfloat16_vector_pcc(const std::vector<bfloat16>& vec_a, const
 
 namespace bmm_op_utils {
 
+// 数字代表tile的数量，比如4,2代表4x2的tile
 constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
     {4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2}, {2, 3}, {6, 1}, {1, 6},
     {5, 1}, {1, 5}, {2, 2}, {4, 1}, {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1},
 }};
 
+// Mpc：每个核心处理的输出矩阵行数（以瓦片为单位）   每个Tensix核心计算的M维度大小
+// subblock_h：子块高度（以瓦片为单位）             Tensix核心内部每次计算处理的行tile数量
+// Mpc必须被subblock_h整除，Mpc>subblock_h
 inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
     uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w) {
     auto Nt_fac = get_prime_factors(Nt);

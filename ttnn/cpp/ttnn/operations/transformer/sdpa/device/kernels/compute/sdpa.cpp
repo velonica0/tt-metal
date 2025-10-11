@@ -355,6 +355,7 @@ void MAIN {
                 // free up cb_prev_max after K chunks
                 // 在K分块处理完成后释放cb_prev_max
                 cb_pop_front(alias_prev_max, Sq_chunk_t);  // 释放最大值缓冲区
+                }
             }
         }
     }
