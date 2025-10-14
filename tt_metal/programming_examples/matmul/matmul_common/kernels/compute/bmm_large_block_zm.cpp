@@ -19,8 +19,8 @@ void MAIN {
     uint32_t num_blocks = get_compile_time_arg_val(7);               // outer inner dim (in inner dim blocks)
     uint32_t out_subblock_h = get_compile_time_arg_val(8);           // inner row block size in tiles
     uint32_t out_subblock_w = get_compile_time_arg_val(9);           // inner column block size in tiles
-    uint32_t out_subblock_num_tiles = get_compile_time_arg_val(10);  // out_subblock_h * out_subblock_w;
-    uint32_t batch = get_compile_time_arg_val(11);                   // batch dim
+    uint32_t out_subblock_num_tiles =
+        get_compile_time_arg_val(10);  // out_subblock_h * out_subblock_w;  应该小于8，这是由SUBBLOCK_HW_CHOICES决定的
 
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
@@ -40,6 +40,8 @@ void MAIN {
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     acquire_dst();
 
+                    // 分块矩阵需要累加之前的轮次，tt::CBIndex::c_24就是用来保存之前的变量。
+                    //  该循环将tt::CBIndex::c_24存入到dst，以供matmul_tiles直接累加
                     if (enable_reload) {
                         copy_tile_to_dst_init_short(tt::CBIndex::c_24);
                         cb_wait_front(tt::CBIndex::c_24, out_subblock_num_tiles);
@@ -110,3 +112,20 @@ void MAIN {
     }
 }
 }  // namespace NAMESPACE
+
+// // Outer计算的是block
+// // Inner计算的是subblock
+// // matmul_tiles计算的是subblock内部的tile
+// for (uint32_t block = 0; block < num_blocks; block++) {           // Outer: K维度分块
+//     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {  // Outer: M维度分块
+//         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {  // Outer: N维度分块
+//             for (uint32_t h = 0; h < out_subblock_h; h++) {       // Inner: 输出子块行
+//                 for (uint32_t w = 0; w < out_subblock_w; w++) {   // Inner: 输出子块列
+//                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {  // Inner: K维度内层
+//                         // 具体的矩阵乘法计算
+//                     }
+//                 }
+//             }
+//         }
+//     }
+// }

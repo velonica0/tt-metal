@@ -76,7 +76,7 @@ void MAIN {
             // Ensure the output circular buffer has space for the result tile.
             cb_reserve_back(cb_out, 1);
             // Pack the result tile into the output circular buffer.
-            pack_tile(0, cb_out);
+            pack_tile(0, cb_out);  // 将dst寄存器中的tile打包到cb_out中
             // Mark the output tile as ready so the writer can read it.
             cb_push_back(cb_out, 1);
 

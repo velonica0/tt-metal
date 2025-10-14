@@ -306,6 +306,11 @@ void MAIN {
                          * 这是一个列广播操作，因为max_diff是列向量，prev_sum是部分归约结果，
                          * 包含QK在dim=-1方向上的tile和。
                          */
+                        // 更新prev_sum，这是因为FA采用分块的方式，因此为了softmax需要更新前面的分块。
+                        // 对应FA公式：prev_sum *= exp(prev_max - cur_max)
+                        // prev_sum(cb_prev_sum) 是一个矩阵,形状为 [Sq_chunk_t, Sk_chunk_t]
+                        // exp(prev_max - cur_max)(cb_exp_max_diff) 是一个列向量,形状为 [Sq_chunk_t, 1]
+                        // 因此需要将exp(prev_max - cur_max)广播到prev_sum的每一列（列广播乘法）
                         mul_tiles_bcast_cols_inplace(
                             alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);  // 前一次和乘以最大值差异
                         /* cb_cur_sum += cb_prev_sum */
@@ -320,6 +325,8 @@ void MAIN {
                          * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
                          * 这使用L1累积来累积到mm2_cur_out上。
                          */
+                        // 更新输出矩阵O，这是因为FA采用分块的方式，因此为了softmax需要更新前面的分块。
+                        // 对应FA公式：cur_out += prev_out * exp(prev_max - cur_max)
                         mul_block_bcast_cols<Sq_chunk_t, vDHt>(  // 执行块乘法并广播列
                             alias_mm2_prev_out,
                             cb_exp_max_diff,

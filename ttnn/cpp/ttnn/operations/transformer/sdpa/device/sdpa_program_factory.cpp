@@ -177,9 +177,14 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
-    uint32_t batch_parallel_factor = std::min(B, num_cores);
-    uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NQH);
-    uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
+    uint32_t batch_parallel_factor =
+        std::min(B, num_cores);  // 将所有core分成batch_parallel_factor个组（第一层组），每个组（第一层组）处理一个batch
+    uint32_t nh_parallel_factor = std::min(
+        num_cores / batch_parallel_factor,
+        NQH);  // 将每个组（第一层组）分成nh_parallel_factor个组（第二层组），每个组（第二层组）处理一个num_heads
+    uint32_t q_parallel_factor = std::min(
+        num_cores / (batch_parallel_factor * nh_parallel_factor),
+        q_num_chunks);  // 将每个组（第二层组）分成q_parallel_factor个组（第三层组），每个组（第三层组）处理一个q_num_chunks
 
     TT_FATAL(
         batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores,
@@ -591,7 +596,10 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         uint32_t local_batch_end = local_batch_start + batch_per_core;
         uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
         uint32_t local_nh_end = local_nh_start + nh_per_core;
-        uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
+        uint32_t local_q_start =
+            (i % q_parallel_factor) *
+            q_per_core;  // i %
+                         // q_parallel_factor：确定当前核心属于哪个chunk组；q_per_core：确定每个核心处理多少个chunks；local_q_start：计算当前核心处理的chunk起始位置
         uint32_t local_q_end = local_q_start + q_per_core;
 
         // clamp all to max values for non-even partitioning

@@ -154,6 +154,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     cb_push_back(reduce_cb, rows);
 }
 
+// 逐元素广播乘法
 template <uint32_t rows, uint32_t cols>
 void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, bool pack_accumulate = false) {
     // Precondition: in0_cb has rows*cols produced
@@ -201,6 +202,7 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, boo
     }
 }
 
+// 逐元素广播乘法
 template <uint32_t rows, uint32_t cols>
 void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     // Precondition: in0_cb has rows*cols produced
