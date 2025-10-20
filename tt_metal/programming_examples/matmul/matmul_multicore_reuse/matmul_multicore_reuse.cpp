@@ -168,6 +168,7 @@ void matmul_multicore_reuse(
     // uint32_t num_cores_x = compute_with_storage_grid_size.x;
     // uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
+    // 根据输出矩阵分配每个core的任务，根据C去获取相应的AB矩阵
     uint32_t num_blocks_y = Mt / per_core_M;
     uint32_t num_blocks_x = Nt / per_core_N;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;

@@ -378,6 +378,7 @@ uint32_t write_partial_tiles_to_memory(
  *                   Reader Kernel Specific Functions                         *
  ******************************************************************************/
 
+// 使用noc传输kv cache与mask，那能不能使用noc传输KV本身呢？
 template <
     uint32_t DHt,
     uint32_t vDHt,

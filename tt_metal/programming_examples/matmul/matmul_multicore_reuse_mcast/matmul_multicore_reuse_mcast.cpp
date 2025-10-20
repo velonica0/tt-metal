@@ -161,6 +161,22 @@ void matmul_multicore_reuse_mcast(
     };
 
     /*
+     * 矩阵乘法示例 (2x2 矩阵)
+     *
+     * 输入矩阵 A 和 B:
+     * A: 1 2
+     *    5 6
+     *
+     * B: 3 4
+     *    7 8
+     *
+     * 计算 A * B 的过程:
+     * [0, 0]: 1*3 + 2*7 = 17  [0, 1]: 1*4 + 2*8 = 20
+     * [1, 0]: 5*3 + 6*7 = 57  [1, 1]: 5*4 + 6*8 = 68
+     * 也就是说，core的每一行共享相同的A矩阵，每一列共享相同的B矩阵
+     * 这就是广播的逻辑
+     */
+    /*
      * Multi-Core prep
      */
     uint32_t num_blocks_y = Mt / per_core_M;
@@ -187,17 +203,21 @@ void matmul_multicore_reuse_mcast(
         {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
+    // 左上角的核心(0,0)，负责发送in0和in1数据
     CoreRange in0_sender_in1_sender(
         {(std::size_t)start_core_x, (std::size_t)start_core_y}, {(std::size_t)start_core_x, (std::size_t)start_core_y});
 
+    // 左侧列(不包括左上角)，发送in0但接收in1
     CoreRange in0_sender_in1_receiver(
         {(std::size_t)start_core_x, (std::size_t)start_core_y + 1},
         {(std::size_t)start_core_x, (std::size_t)start_core_y + num_cores_r - 1});
 
+    // 顶部行(不包括左上角)，接收in0但发送in1
     CoreRange in0_receiver_in1_sender(
         {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y});
 
+    // 其余核心，同时接收in0和in1
     CoreRange in0_receiver_in1_receiver(
         {(std::size_t)start_core_x + 1, (std::size_t)start_core_y + 1},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
@@ -266,21 +286,25 @@ void matmul_multicore_reuse_mcast(
      * Create Kernels (Reader, Writer, Compute)
      */
     // Create reader and writer kernels per core group
+    // Kernel与BRISC/NRISC无关（可以随便选择）
+    // Kernel也与NoC无关（但是同一个core上的BRISC/NRISC必须是不同的NoC）
+    // 编程时只需要考虑NoC的方向    NOC 0: 优先沿 +X → +Y 方向传输(先向右,再向下)   NOC 1: 优先沿 -Y → -X
+    // 方向传输(先向上,再向左)
 
     auto mm_reader_kernel_in0_sender_in1_sender_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
-        in0_sender_in1_sender,
+        in0_sender_in1_sender,  // 左上角的核心(0,0)，负责发送in0和in1数据
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_0_default,
+            .noc = tt_metal::NOC::RISCV_0_default,  // 传输in0 in1 Noc0
             .compile_args = reader_compile_time_args});
 
     auto mm_reader_kernel_in0_sender_in1_receiver_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_common/kernels/dataflow/"
         "reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
-        in0_sender_in1_receiver,
+        in0_sender_in1_receiver,  // 左侧列(不包括左上角)，发送in0但接收in1
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt_metal::NOC::RISCV_0_default,
@@ -290,20 +314,21 @@ void matmul_multicore_reuse_mcast(
         program,
         "tt_metal/programming_examples/matmul_common/kernels/dataflow/"
         "reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
-        in0_receiver_in1_sender,
+        in0_receiver_in1_sender,  // 顶部行(不包括左上角)，接收in0但发送in1
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
+            .noc = tt_metal::NOC::
+                RISCV_1_default,  // 选择NOC1的理由见https://github.com/tenstorrent/tt-low-level-documentation/blob/main/data_movement_doc/multicast_schemes/Multicast%20Schemes.md#per-result-callouts
             .compile_args = reader_compile_time_args});
 
     auto mm_reader_kernel_in0_receiver_in1_receiver_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_common/kernels/dataflow/"
         "reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
-        in0_receiver_in1_receiver,
+        in0_receiver_in1_receiver,  // 其余核心，同时接收in0和in1
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
+            .noc = tt_metal::NOC::RISCV_1_default,  // 用该noc执行noc_semaphore_inc
             .compile_args = reader_compile_time_args});
 
     auto unary_writer_kernel_noc0_id = tt_metal::CreateKernel(
@@ -318,7 +343,7 @@ void matmul_multicore_reuse_mcast(
     auto unary_writer_kernel_noc1_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
-        left_column,
+        left_column,  // 左侧列(不包括左上角)，发送in0但接收in1
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_1_default,
@@ -352,12 +377,14 @@ void matmul_multicore_reuse_mcast(
             CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
             CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_r - 1};
 
-            auto left_core_physical = mesh_device->worker_core_from_logical_core(left_core);
-            auto left_core_plus_one_physical = mesh_device->worker_core_from_logical_core(left_core_plus_one);
-            auto right_core_physical = mesh_device->worker_core_from_logical_core(right_core);
-            auto top_core_physical = mesh_device->worker_core_from_logical_core(top_core);
-            auto top_core_plus_one_physical = mesh_device->worker_core_from_logical_core(top_core_plus_one);
-            auto bottom_core_physical = mesh_device->worker_core_from_logical_core(bottom_core);
+            auto left_core_physical = mesh_device->worker_core_from_logical_core(left_core);  // 当前行最左侧core
+            auto left_core_plus_one_physical =
+                mesh_device->worker_core_from_logical_core(left_core_plus_one);  // 当前行最左侧core的下一个core
+            auto right_core_physical = mesh_device->worker_core_from_logical_core(right_core);  // 当前行最右侧core
+            auto top_core_physical = mesh_device->worker_core_from_logical_core(top_core);      // 当前列最顶部core
+            auto top_core_plus_one_physical =
+                mesh_device->worker_core_from_logical_core(top_core_plus_one);  // 当前列最顶部core的下一个core
+            auto bottom_core_physical = mesh_device->worker_core_from_logical_core(bottom_core);  // 当前列最底部core
 
             std::vector<uint32_t> mm_reader_args = {
                 (std::uint32_t)src0_dram_buffer->address(),   // in0_buffer_addr
@@ -366,8 +393,8 @@ void matmul_multicore_reuse_mcast(
                 (std::uint32_t)Kt,                            // in0_buffer_stride_h
                 (std::uint32_t)in0_block_w,                   // in0_buffer_next_block_stride
 
-                (std::uint32_t)in0_block_w,               // in0_block_w
-                (std::uint32_t)per_core_M,                // in0_block_h
+                (std::uint32_t)in0_block_w,               // in0_block_w    in0 block的tile宽度
+                (std::uint32_t)per_core_M,                // in0_block_h    in0 block的tile高度
                 (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
 
                 (std::uint32_t)src1_dram_buffer->address(),  // in1_buffer_addr
@@ -382,6 +409,7 @@ void matmul_multicore_reuse_mcast(
 
                 (std::uint32_t)Kt / in0_block_w,  // num_blocks
 
+                // 对于同一行的core，均相等
                 (std::uint32_t)right_core_physical.x,          // in0_mcast_dest_noc_start_x
                 (std::uint32_t)right_core_physical.y,          // in0_mcast_dest_noc_start_y
                 (std::uint32_t)left_core_plus_one_physical.x,  // in0_mcast_dest_noc_end_x
@@ -392,13 +420,14 @@ void matmul_multicore_reuse_mcast(
                 (std::uint32_t)in0_mcast_sender_semaphore_id,
                 (std::uint32_t)in0_mcast_receiver_semaphore_id,
 
-                (std::uint32_t)bottom_core_physical.x,        // in0_mcast_dest_noc_start_x
-                (std::uint32_t)bottom_core_physical.y,        // in0_mcast_dest_noc_start_y
-                (std::uint32_t)top_core_plus_one_physical.x,  // in0_mcast_dest_noc_end_x
-                (std::uint32_t)top_core_plus_one_physical.y,  // in0_mcast_dest_noc_end_y
-                (std::uint32_t)(num_cores_r - 1),             // in0_mcast_num_dests
-                (std::uint32_t)top_core_physical.x,           // in0_mcast_sender_noc_x
-                (std::uint32_t)top_core_physical.y,           // in0_mcast_sender_noc_y
+                // 对于同一列的core，均相等
+                (std::uint32_t)bottom_core_physical.x,        // in1_mcast_dest_noc_start_x
+                (std::uint32_t)bottom_core_physical.y,        // in1_mcast_dest_noc_start_y
+                (std::uint32_t)top_core_plus_one_physical.x,  // in1_mcast_dest_noc_end_x
+                (std::uint32_t)top_core_plus_one_physical.y,  // in1_mcast_dest_noc_end_y
+                (std::uint32_t)(num_cores_r - 1),             // in1_mcast_num_dests
+                (std::uint32_t)top_core_physical.x,           // in1_mcast_sender_noc_x
+                (std::uint32_t)top_core_physical.y,           // in1_mcast_sender_noc_y
                 (std::uint32_t)in1_mcast_sender_semaphore_id,
                 (std::uint32_t)in1_mcast_receiver_semaphore_id,
 
@@ -440,13 +469,19 @@ void matmul_multicore_reuse_mcast(
                 writer_kernel_ids.push_back(unary_writer_kernel_noc1_id);
             } else if (core_idx_x != 0 and core_idx_y == 0) {
                 tt_metal::SetRuntimeArgs(
-                    program, mm_reader_kernel_in0_receiver_in1_sender_id, core, mm_reader_args);    // RISCV_1_default
+                    program,
+                    mm_reader_kernel_in0_receiver_in1_sender_id,
+                    core,
+                    mm_reader_args);  // RISCV_1_default NOC1
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args);  // RISCV_0_default
                 reader_kernel_ids.push_back(mm_reader_kernel_in0_receiver_in1_sender_id);
                 writer_kernel_ids.push_back(unary_writer_kernel_noc0_id);
             } else {
                 tt_metal::SetRuntimeArgs(
-                    program, mm_reader_kernel_in0_receiver_in1_receiver_id, core, mm_reader_args);  // RISCV_1_default
+                    program,
+                    mm_reader_kernel_in0_receiver_in1_receiver_id,
+                    core,
+                    mm_reader_args);  // RISCV_1_default NOC1
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_noc0_id, core, writer_args);  // RISCV_0_default
                 reader_kernel_ids.push_back(mm_reader_kernel_in0_receiver_in1_receiver_id);
                 writer_kernel_ids.push_back(unary_writer_kernel_noc0_id);

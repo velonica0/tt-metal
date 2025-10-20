@@ -110,6 +110,7 @@ inline float check_bfloat16_vector_pcc(const std::vector<bfloat16>& vec_a, const
 
 namespace bmm_op_utils {
 
+// subblock用于优化dst的使用，每个尺寸代表着能充分利用dst的尺寸大小（一次matmul能计算的tile数量）
 // 数字代表tile的数量，比如4,2代表4x2的tile
 constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {{
     {4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2}, {2, 3}, {6, 1}, {1, 6},

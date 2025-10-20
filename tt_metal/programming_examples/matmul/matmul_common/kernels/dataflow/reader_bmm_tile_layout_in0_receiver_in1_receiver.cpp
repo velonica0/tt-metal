@@ -62,6 +62,7 @@ void kernel_main() {
     uint32_t batch = get_arg_val<uint32_t>(37);
     uint32_t bcast_B = get_arg_val<uint32_t>(38);
 
+    // 广播机制reader需要用到的cb与sender一样
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
