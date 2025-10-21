@@ -23,6 +23,8 @@ using namespace tt::constants;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
+// 分为两个函数，一个是处理in0的，一个是处理in1的
+// mcast也是一维的，每次只mcast一个维度（in0或in1）
 namespace reuse_mcast_1d_optimized_helpers {
 
 uint32_t get_preferred_noc(
