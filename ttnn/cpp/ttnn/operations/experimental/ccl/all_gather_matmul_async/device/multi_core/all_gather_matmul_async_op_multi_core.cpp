@@ -32,6 +32,7 @@ using Tensors = std::vector<Tensor>;
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
+// 分别调用了两个独立的程序工厂（matmul+all_gather）
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& all_gather_output_tensor,
@@ -77,6 +78,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     ////////////////////////////////////////////////////////
 
     // Create a matmul signal info object that gets populated by the matmul kernel
+    // MatmulFusedOpSignaler是一个双向信号器,它既服务于Matmul,也服务于All-Gather:
+    // Matmul是信号的发送方,它需要知道All-Gather的执行参数,才能在正确的时机发送正确的信号
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
         ttnn::experimental::ccl::MatmulFusedOpSignaler(ttnn::experimental::ccl::MatmulFusedOpSignalerType::ALL_GATHER);
     matmul_fused_op_signaler->init_all_gather(
@@ -95,10 +98,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<Tensors>>
         matmul_override_runtime_arguments_callback;
 
+    // 调用matmul自己的工厂函数，根据program_config的类型，选择不同的matmul程序工厂
+    // matmul_multi_core_reuse_mcast_2d_optimized_helper或者matmul_multi_core_reuse_mcast_1d_optimized_helper
     std::visit(
         [&](const auto& config) {
             using ProgramConfigType = std::decay_t<decltype(config)>;
             if (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                // 调用ttnn/cpp/ttnn/operations/matmul/device/matmul_op_multi_core_reuse_mcast_2d_program_factory.cpp
                 matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_2d_optimized_helper(
                     program,
                     all_gather_output_tensor,
@@ -141,13 +147,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     }
 
     // Create the all gather fused op signaler
+    // All-Gather是信号的接收方,它通过AllGatherFusedOpSignaler从MatmulFusedOpSignaler获取信号量信息
     std::optional<AllGatherFusedOpSignaler> all_gather_fused_op_signaler = AllGatherFusedOpSignaler();
     all_gather_fused_op_signaler->init_fused_op(
-        matmul_fused_op_signaler->fused_op_receiver_cores_noc,
-        matmul_fused_op_signaler->fused_op_receiver_signal_semaphores,
-        matmul_fused_op_signaler->fused_op_signaler_mode);
+        matmul_fused_op_signaler->fused_op_receiver_cores_noc,  // All-Gather worker核心的NOC坐标列表
+        matmul_fused_op_signaler
+            ->fused_op_receiver_signal_semaphores,          // 为All-Gather核心创建的信号量ID列表(两个方向各一个)
+        matmul_fused_op_signaler->fused_op_signaler_mode);  // 信号模式(SINGLE或MULTI),决定是通知一个核心还是所有核心
 
     // All Gather
+    // 调用ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_program_minimal_variants.cpp
+    // 调用ttnn::all_gather_async_minimal_default_helper，使用all-gather标准kernel
     tt::tt_metal::operation::ProgramWithCallbacks program_with_callbacks =
         ttnn::all_gather_async_minimal_default_helper(
             matmul_program_with_callbacks->program,
