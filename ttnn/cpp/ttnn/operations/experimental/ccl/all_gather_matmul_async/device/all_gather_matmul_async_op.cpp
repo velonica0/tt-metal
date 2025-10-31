@@ -18,9 +18,9 @@ namespace ccl {
 namespace all_gather_matmul_async_detail {
 
 AllGatherMatmulAsync create_all_gather_matmul_async_struct(
-    const ttnn::AllGatherAsync& all_gather_struct_input,
-    const operations::matmul::Matmul& matmul_struct_input,
-    const CoreCoord all_gather_core_grid_offset,
+    const ttnn::AllGatherAsync& all_gather_struct_input,    // All-Gather操作的配置
+    const operations::matmul::Matmul& matmul_struct_input,  // Matmul操作的配置
+    const CoreCoord all_gather_core_grid_offset,            // 核心网格偏移量
     const std::vector<IDevice*>& devices) {
     return ttnn::AllGatherMatmulAsync{
         all_gather_struct_input, matmul_struct_input, all_gather_core_grid_offset, devices};
@@ -212,6 +212,10 @@ namespace operations {
 namespace experimental {
 namespace ccl {
 
+// 入口函数，all_gather_matmul_async.cpp的调用函数
+// 该函数实现了在分布式环境中进行异步的 AllGatherMatmul 操作
+// 输入参数包括输入张量、权重张量、可选的持久化输出缓冲区、维度、多设备全局信号量、AllGather
+// 核心网格偏移、可选的偏置张量、链接数、可选的内存配置等 返回值为输出张量的向量
 std::vector<ttnn::Tensor> all_gather_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
@@ -302,6 +306,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
             /*global_cb=*/std::nullopt});
 
     return tt::tt_metal::operation::run(
+        // 接收一个AllGatherMatmulAsync算子结构体，由create_all_gather_matmul_async_struct创建
         ttnn::ccl::all_gather_matmul_async_detail::create_all_gather_matmul_async_struct(
             /* All Gather Params */
             all_gather_async_struct,

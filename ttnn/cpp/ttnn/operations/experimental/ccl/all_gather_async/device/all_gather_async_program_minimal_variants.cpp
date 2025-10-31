@@ -248,6 +248,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         is_last_chip);
 
     /* All gather fusion */
+    // 是否启用融合模式
     bool fuse_op = fused_op_signaler.has_value();
 
     // Need a separate signaler for the sender workers, to handle the first tensor slice that is locally available
