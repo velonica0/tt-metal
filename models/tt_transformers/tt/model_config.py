@@ -1030,10 +1030,10 @@ class ModelArgs:
                         self.tile_padded_batch_rows,
                         self.dim // attn_input_grid.num_cores,
                     ),  # Shard shape: [32, 128] -> 1 shard per core
-                    attn_input_grid,
+                    attn_input_grid,  # input的grid
                     ttnn.ShardStrategy.WIDTH,
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
+                    use_height_and_width_as_shard_shape=True,  # True的话 shape是每一个core的形状
                 )
             )
 

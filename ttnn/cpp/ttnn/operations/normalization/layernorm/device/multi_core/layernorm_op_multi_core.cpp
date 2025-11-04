@@ -81,8 +81,8 @@ bool CB_can_fit_in_L1(
 operation::ProgramWithCallbacks layernorm_multi_core(
     const Tensor& a,
     const std::optional<const Tensor>& b,
-    const std::optional<const Tensor>& gamma,
-    const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& gamma,  // scaler
+    const std::optional<const Tensor>& beta,   // bias
     Tensor& output,
     LayerNormType norm_type,
     float eps,
@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     const auto& shape = a.padded_shape();
     uint32_t W = shape[-1], H = shape[-2];
     uint32_t HW = H * W;
-    uint32_t NC = a.physical_volume() / HW;
+    uint32_t NC = a.physical_volume() / HW;  // B*C
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
 
@@ -193,9 +193,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
     uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
     uint32_t im1_t = 2;
-    uint32_t in2_t = 2;  // scaler for reduce coming from reader
-    uint32_t in3_t = 2;  // epsilon coming from reader
+    uint32_t in2_t = 2;  // scaler for reduce coming from reader    用于归约
+    uint32_t in3_t = 2;  // epsilon coming from reader              用于eps
     uint32_t im2_t = 2;  //
+    // 判断当前的CB L1能否满足，超过了即走大容量tensor
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,
@@ -255,8 +256,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         num_beta_tiles,
         block_size);
 
-    uint32_t num_tile_rows = NC * Ht;
+    uint32_t num_tile_rows = NC * Ht;  // 所有core分配到的tile行数（Interleaved 默认处理若干完整的行）
     auto grid_size = device->compute_with_storage_grid_size();
+
+    // core分配
     auto
         [num_cores,
          all_cores,
@@ -314,6 +317,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
 
+    // RMSnorm只会走这边
     auto reader_kernel_path = use_row_major_kernel
                                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln_rm_gb.cpp"
@@ -352,6 +356,19 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         compute_args.push_back(legacy_rsqrt);
     }
 
+    /*
+    large_tensor_needed && !use_row_major_kernel ?
+    ├─ true: 大张量处理
+    │  ├─ use_welford_and_not_rms_norm ?
+    │  │  ├─ true:  → layernorm_large_tensor_welford.cpp
+    │  │  └─ false: → layernorm_large_tensor.cpp
+    │  └─
+    └─ false: 标准张量处理
+    ├─ use_welford_and_not_rms_norm ?
+    │  ├─ true:  → layernorm_welford.cpp
+    │  └─ false: → layernorm.cpp
+    └─
+    */
     auto compute_kernels_id = CreateKernel(
         program,
         large_tensor_needed and !use_row_major_kernel
@@ -359,9 +376,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                               "layernorm_large_tensor_welford.cpp"
                                             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
                                               "layernorm_large_tensor.cpp")
-            : (use_welford_and_not_rms_norm
-                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp"
-                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp"),
+            : (use_welford_and_not_rms_norm ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+                                              "layernorm_welford.cpp"
+                                            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+                                              "layernorm.cpp"),  // RMSnorm只会走这个
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,

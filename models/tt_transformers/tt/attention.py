@@ -394,6 +394,8 @@ class Attention(LightweightModule):
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
 
+        # MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+        # 执行ttnn/cpp/ttnn/operations/matmul/device/matmul_op_multi_core_reuse_mcast_dram_sharded_program_factory.cpp
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -684,6 +686,7 @@ class Attention(LightweightModule):
                 raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
+        # MatmulMultiCoreReuseMultiCastProgramConfig
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
