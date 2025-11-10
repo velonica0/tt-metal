@@ -102,7 +102,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
 
     uint32_t Wt = W / TILE_WIDTH;
-    uint32_t Ht = H / TILE_HEIGHT;
+    uint32_t Ht = H / TILE_HEIGHT;  //是每个样本在高度方向的 tile 行数（把高 H 按 TILE_HEIGHT 切成多少行）
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -175,6 +175,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     // TODO(AP): can also add support for block_size=7 -> 63, 28
     uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
     bool large_tensor_needed = false;
+    //rmsnorm.py中的self.weigth(gamma)是row_major布局
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
     uint32_t in0_t = WtB;  // cb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
@@ -256,7 +257,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         num_beta_tiles,
         block_size);
 
-    uint32_t num_tile_rows = NC * Ht;  // 所有core分配到的tile行数（Interleaved 默认处理若干完整的行）
+    uint32_t num_tile_rows = NC * Ht;  // 整个张量需要处理的“tile 行”的总数
     auto grid_size = device->compute_with_storage_grid_size();
 
     // core分配
@@ -317,7 +318,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
 
-    // RMSnorm只会走这边
+    // RMSnorm根据large_tnesor_needed来选择reader_unary_interleaved_ln_rm_gb或者reader_unary_interleaved_ln_large_tensor
     auto reader_kernel_path = use_row_major_kernel
                                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln_rm_gb.cpp"

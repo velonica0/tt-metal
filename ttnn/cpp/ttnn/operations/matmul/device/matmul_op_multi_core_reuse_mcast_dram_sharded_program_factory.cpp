@@ -124,6 +124,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
     }
 
     // get the dram readers
+    // 计算core
     std::vector<CoreCoord> all_worker_cores_ordered;
     CoreRangeSet all_worker_cores;
     get_optimal_dram_bank_to_reader_assignment(device, all_worker_cores_ordered, all_worker_cores, in0_noc);
@@ -967,8 +968,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
-    CoreRangeSet input_all_cores_storage = a.shard_spec().value().grid;
-    CoreRangeSet output_all_cores_storage = output.shard_spec().value().grid;
+    CoreRangeSet input_all_cores_storage = a.shard_spec().value().grid;         //输入A(shared)的所有core
+    CoreRangeSet output_all_cores_storage = output.shard_spec().value().grid;   //输出O(shared)的所有core
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);

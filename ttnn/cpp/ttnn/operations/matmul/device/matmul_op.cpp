@@ -261,6 +261,7 @@ inline uint32_t get_per_core_factor(
     return 1;
 }
 
+//L1 内存适配优化函数,用于在给定的 M、N、K 三个维度参数下,找到能够适配硬件 L1 内存的最优参数组合。
 inline std::vector<uint32_t> get_multi_dim_per_core_factor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -805,7 +806,7 @@ MatmulProgramConfig create_matmul_program_config(
         k_tiles_per_core,
         estimate_interm_tile_size(compute_kernel_config, output_dtype),
         /*adjust_in0_block_w=*/false);
-    uint32_t out_block_h = mutlti_dim_per_core_factor[0];
+    uint32_t out_block_h = mutlti_dim_per_core_factor[0];   //就是归一化输出的高，应该变成1（这样才能把归一化输出的完整行当作一次矩阵乘）
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
     auto matmul_params = get_subblock_sizes(out_block_h, out_block_w, fp32_dest_acc_en);
@@ -1096,6 +1097,7 @@ MatmulProgramConfig get_matmul_program_config(
         output_dtype);
 }
 
+// 自动生成 matmul 程序配置的入口函数,它根据输入张量的特性(是否 sharded、用户是否提供配置等)选择合适的配置生成策略。
 inline MatmulProgramConfig generate_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -1111,6 +1113,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
         CoreCoord core_coord;
         if (has_user_grid) {
             core_coord = user_core_coord.value();
+            //interleaved 用户指定 core grid 的配置
             return create_matmul_program_config(
                 input_tensor_a,
                 input_tensor_b,
@@ -1123,6 +1126,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
         } else {
             tt::tt_metal::IDevice* device = input_tensor_a.device();
             auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+            //interleaved 自动生成配置
             return create_simple_matmul_program_config(
                 input_tensor_a,
                 input_tensor_b,
@@ -1134,6 +1138,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
         }
     } else {
         bool bmm = user_run_batched;
+        // shared配置
         return get_matmul_program_config(
             input_tensor_a,
             input_tensor_b,
@@ -1598,6 +1603,7 @@ void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
     }
 }
 
+//首先验证输入合法性
 void Matmul::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
@@ -2390,6 +2396,7 @@ void Matmul::validate(
         chosen_program_config);
 }
 
+// 计算输出张量的规格
 std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<Tensor>>& optional_output_tensors,
@@ -2587,6 +2594,7 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
         output_shape, TensorLayout(output_dtype.value(), PageConfig(Layout::TILE, output_tile), output_mem_config))};
 }
 
+// 创建实际的输出张量对象
 std::vector<Tensor> Matmul::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     return operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
@@ -2611,6 +2619,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> create_homogenous_mesh_wor
 }
 
 // 决定走哪个program工厂
+// 生成在设备上执行的计算程序
 operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,

@@ -11,9 +11,9 @@ void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t Mt = get_arg_val<uint32_t>(2);
-    uint32_t Kt = get_arg_val<uint32_t>(3);
-    uint32_t Nt = get_arg_val<uint32_t>(4);
+    uint32_t Mt = get_arg_val<uint32_t>(2); //M维度 tile个数
+    uint32_t Kt = get_arg_val<uint32_t>(3); //K维度 tile个数
+    uint32_t Nt = get_arg_val<uint32_t>(4); //N维度 tile个数
     uint32_t MtKt = get_arg_val<uint32_t>(5);  // if 0
     uint32_t KtNt = get_arg_val<uint32_t>(6);
     uint32_t batch = get_arg_val<uint32_t>(7);
@@ -37,6 +37,7 @@ void kernel_main() {
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
+    //输入A的起始行索引（改行的第一个tile）
     uint32_t itileA = output_tile_start_id / Nt * Kt;  // input0 row = output row * input0 width
 
     // Keep track of end of output row and end of output batch
@@ -75,8 +76,8 @@ void kernel_main() {
             }
             // DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
 
-            itileA += 1;   // A is MK
-            itileB += Nt;  // B is KN, so to get k++ we stride by Nt
+            itileA += 1;   // A is MK   向右移动
+            itileB += Nt;  // B is KN, so to get k++ we stride by Nt    向下移动
         }  // Kt loop
         outbatch += 1;
         itileB_batch += 1;
