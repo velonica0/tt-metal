@@ -806,7 +806,199 @@ MatmulProgramConfig create_matmul_program_config(
         k_tiles_per_core,
         estimate_interm_tile_size(compute_kernel_config, output_dtype),
         /*adjust_in0_block_w=*/false);
-    uint32_t out_block_h = mutlti_dim_per_core_factor[0];   //就是归一化输出的高，应该变成1（这样才能把归一化输出的完整行当作一次矩阵乘）
+    uint32_t out_block_h = mutlti_dim_per_core_factor[0];   
+    uint32_t out_block_w = mutlti_dim_per_core_factor[1];
+
+    auto matmul_params = get_subblock_sizes(out_block_h, out_block_w, fp32_dest_acc_en);
+    uint32_t out_subblock_h = std::get<0>(matmul_params);
+    uint32_t out_subblock_w = std::get<1>(matmul_params);
+    bool transpose_mcast =
+        a_is_block_sharded && input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
+    if (out_subblock_w != n_tiles_per_core) {
+        out_subblock_h = 1;
+    }
+
+    return MatmulMultiCoreReuseMultiCastProgramConfig{
+        .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
+        .in0_block_w = k_tiles_per_core,
+        .out_subblock_h = out_subblock_h,
+        .out_subblock_w = out_subblock_w,
+        .out_block_h = out_block_h,
+        .out_block_w = out_block_w,
+        .per_core_M = m_tiles_per_core,
+        .per_core_N = n_tiles_per_core,
+        .transpose_mcast = transpose_mcast,
+        .fused_activation = fused_activation,
+    };
+}
+
+// 融合了norm的matmul配置
+MatmulProgramConfig create_matmul_fuse_norm_program_config(
+    const Tensor& input_tensor_a,   //rmsnorm不改变shape，因此先直接用吧
+    const Tensor& input_tensor_b,
+    const uint32_t bias_single_tile_size,
+    const std::optional<const CoreCoord> user_core_coord,
+    const std::optional<UnaryWithParam>& fused_activation,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const MemoryConfig& mem_config,
+    const tt::tt_metal::DataType output_dtype) {
+    const auto& a_shape = input_tensor_a.logical_shape();
+    const auto& b_shape = input_tensor_b.logical_shape();
+    const auto& a_padded_shape = input_tensor_a.padded_shape();
+    const auto& b_padded_shape = input_tensor_b.padded_shape();
+    auto a_layout = input_tensor_a.memory_config().memory_layout();
+    auto inteneded_k_size_of_a = a_shape[-1];
+    auto inteneded_k_size_of_b = b_shape[-2];
+    auto k_size = a_padded_shape[-1];
+    auto m_size = a_padded_shape[-2];
+    auto n_size = b_padded_shape[-1];
+    uint32_t batch_size_a = get_batch_size(a_padded_shape);
+    uint32_t batch_size_b = get_batch_size(b_padded_shape);
+    bool input_b_is_batched = batch_size_b > 1;
+    bool any_size_within_tile = k_size <= ttnn::TILE_SIZE || m_size <= ttnn::TILE_SIZE || n_size <= ttnn::TILE_SIZE;
+    const auto& input_tensor_a_memory_config = input_tensor_a.memory_config();
+    const auto& input_tensor_b_memory_config = input_tensor_b.memory_config();
+    bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
+    bool a_is_sharded = input_tensor_a.is_sharded();
+    TT_FATAL(inteneded_k_size_of_a == inteneded_k_size_of_b, "The k dimension does not match between tensors");
+    TT_FATAL(
+        (batch_size_a * m_size) % ttnn::TILE_SIZE == 0 && k_size % ttnn::TILE_SIZE == 0 &&
+            n_size % ttnn::TILE_SIZE == 0,
+        "The last two dimensions of the first tensor and the last dimension "
+        "of the second tensor must be a multiple of "
+        "tile size");
+    auto core_coord = input_tensor_a.device()->compute_with_storage_grid_size();
+    bool has_user_core_coord = user_core_coord.has_value();
+    if (has_user_core_coord) {
+        auto x = user_core_coord.value().x;
+        auto y = user_core_coord.value().y;
+        if (x <= core_coord.x && y <= core_coord.y) {
+            core_coord = user_core_coord.value();
+        }
+    }
+
+    uint32_t m_tiles_per_core;
+    uint32_t n_tiles_per_core;
+    uint32_t k_tiles_per_core;  //每个core一次迭代中在K维度上拿多少个tile，决定了in0_block_w
+    // 不走该if，因为weigth的batch==1
+    if (input_b_is_batched) {
+        TT_FATAL(!fused_activation.has_value(), "Cannot use activation with batched input b");
+        if (!a_is_sharded && !input_tensor_b.is_sharded()) {
+            m_tiles_per_core = div_up(m_size, ttnn::TILE_SIZE);
+            n_tiles_per_core = div_up(n_size, ttnn::TILE_SIZE);
+            k_tiles_per_core = 1;  // TODO(arakhmati): Can it be more than 1 without
+                                   // running out of memory?
+            if (!can_cbs_fit_in_l1(
+                    input_tensor_a,
+                    input_tensor_b,
+                    bias_single_tile_size,
+                    m_tiles_per_core,
+                    n_tiles_per_core,
+                    k_tiles_per_core,
+                    compute_kernel_config,
+                    output_dtype)) {
+                return create_simple_matmul_program_config(
+                    input_tensor_a,
+                    input_tensor_b,
+                    bias_single_tile_size,
+                    compute_kernel_config,
+                    core_coord,
+                    mem_config,
+                    output_dtype);
+            }
+        } else if (a_is_sharded) {
+            TT_FATAL(
+                a_layout != TensorMemoryLayout::WIDTH_SHARDED,
+                "MatmulMultiCoreReuseProgramConfig: Input A cannot be width sharded, got layout: {}",
+                a_layout);
+            auto shard_shape = input_tensor_a_memory_config.shard_spec().value().shape;
+            uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
+            m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
+            n_tiles_per_core = n;
+            k_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
+        } else {
+            TT_FATAL(
+                input_tensor_b_memory_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
+                "MatmulMultiCoreReuseProgramConfig: Input B cannot be width sharded, got layout: {}",
+                input_tensor_b_memory_config.memory_layout());
+            auto shard_shape = input_tensor_b_memory_config.shard_spec().value().shape;
+            m_tiles_per_core = div_up(m_size, ttnn::TILE_SIZE);
+            n_tiles_per_core = shard_shape[1] / ttnn::TILE_SIZE;
+            k_tiles_per_core = 1;
+        }
+
+        auto matmul_params = get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, fp32_dest_acc_en);
+        uint32_t out_subblock_h = std::get<0>(matmul_params);
+        uint32_t out_subblock_w = std::get<1>(matmul_params);
+
+        return MatmulMultiCoreReuseProgramConfig{
+            .compute_with_storage_grid_size = {core_coord.x, core_coord.y},
+            .in0_block_w = k_tiles_per_core,
+            .out_subblock_h = out_subblock_h,
+            .out_subblock_w = out_subblock_w,
+            .per_core_M = m_tiles_per_core,
+            .per_core_N = n_tiles_per_core,
+        };
+    }
+
+    auto height = batch_size_a * m_size;
+    auto width = n_size;
+    bool a_is_block_sharded = a_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    if (is_narrow_shape(height, width) || any_size_within_tile) {
+        if (!a_is_block_sharded) {
+            return create_matmul_1d_systolic_array_program_config(
+                input_tensor_a,
+                input_tensor_b,
+                bias_single_tile_size,
+                core_coord,
+                fused_activation,
+                fp32_dest_acc_en,
+                a_layout,
+                compute_kernel_config,
+                output_dtype);
+        }
+    }
+    if (!a_is_sharded) {
+        m_tiles_per_core = (uint32_t)std::ceil((((double)batch_size_a * m_size) / ttnn::TILE_SIZE) / core_coord.y);
+        n_tiles_per_core = (uint32_t)std::ceil((double)n_size / ttnn::TILE_SIZE / core_coord.x);
+        k_tiles_per_core = 4;  // TODO(arakhmati): What is a good starting point?
+        while ((k_size / ttnn::TILE_SIZE) % k_tiles_per_core != 0) {
+            k_tiles_per_core -= 1;
+        }
+    } else {
+        if (!a_is_block_sharded) {
+            return create_matmul_1d_systolic_array_program_config(
+                input_tensor_a,
+                input_tensor_b,
+                bias_single_tile_size,
+                core_coord,
+                fused_activation,
+                fp32_dest_acc_en,
+                a_layout,
+                compute_kernel_config,
+                output_dtype);
+        }
+        uint32_t k = a_shape[-1] / ttnn::TILE_SIZE;
+        uint32_t n = b_shape[-1] / ttnn::TILE_SIZE;
+        auto shard_shape = input_tensor_a_memory_config.shard_spec().value().shape;
+        m_tiles_per_core = shard_shape[0] / ttnn::TILE_SIZE;
+        n_tiles_per_core = (n * shard_shape[1]) / (k * ttnn::TILE_SIZE);
+        k_tiles_per_core = std::gcd(shard_shape[1] / ttnn::TILE_SIZE, k);
+    }
+
+    n_tiles_per_core = std::max(n_tiles_per_core, (unsigned int)1);
+
+    // 
+    auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
+        input_tensor_a,
+        input_tensor_b,
+        bias_single_tile_size,
+        m_tiles_per_core,
+        n_tiles_per_core,
+        k_tiles_per_core,
+        estimate_interm_tile_size(compute_kernel_config, output_dtype),
+        /*adjust_in0_block_w=*/false);
+    uint32_t out_block_h = mutlti_dim_per_core_factor[0];   
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
     auto matmul_params = get_subblock_sizes(out_block_h, out_block_w, fp32_dest_acc_en);

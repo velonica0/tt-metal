@@ -227,6 +227,20 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::optional<UnaryWithParam> fused_activation;
 };
 
+struct MatmulMultiCoreReuseFuseRMSNormConfig {
+    CoreCoord compute_with_storage_grid_size;
+    std::size_t in0_block_w{};
+    std::size_t out_subblock_h{};
+    std::size_t out_subblock_w{};
+    std::size_t out_block_h{};
+    std::size_t out_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
+    bool transpose_mcast{};
+    std::optional<UnaryWithParam> fused_activation;
+    bool fuse_batch = true;
+};
+
 struct MatmulMultiCoreProgramConfig {};
 
 using MatmulProgramConfig = std::variant<
@@ -234,7 +248,8 @@ using MatmulProgramConfig = std::variant<
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
-    MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>;
+    MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
+    MatmulMultiCoreReuseFuseRMSNormConfig>;
 
 struct Matmul {
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
