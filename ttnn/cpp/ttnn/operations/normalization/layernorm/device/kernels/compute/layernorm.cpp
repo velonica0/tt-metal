@@ -32,8 +32,8 @@ ALWI void REL() { release_dst(); }
 namespace NAMESPACE {
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t Wt = get_compile_time_arg_val(0);                //宽度维度的 tile 数量
+    constexpr uint32_t blk = get_compile_time_arg_val(1);               //core单次处理多少个 tile
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
@@ -59,8 +59,8 @@ void MAIN {
 #endif
     constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
     constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
-    constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
-    constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
+    constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2             每一个数的平方
+    constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps 归一化因子
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
 #ifdef FUSE_PRE_ADD
@@ -128,53 +128,6 @@ void MAIN {
 #endif
 #endif
 
-#ifndef RMSNORM
-        /*
-         * E[x]
-         * means = ttnn.sum(x, 3, True, None, None, 1.0/W) # -> NCH1
-         */
-        ACQ();
-        cb_reserve_back(cb_ex, onetile);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x, cb_scaler, cb_ex);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_x, wt + blk);
-            for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x, cb_scaler, wt + j, scaler0, dst0);
-            }
-            // we don't pop cb_x until we compute Ex
-        }
-        pack_tile(dst0, cb_ex);
-        reduce_uninit();
-        REL();
-
-        cb_push_back(cb_ex, 1);
-
-        /*
-         * x - E[x]
-         * compute xmm=x-mean. Reuse cb_x since we didn't pop anything from it
-         */
-        if constexpr (FLOAT32_DTYPE) {
-            reconfig_data_format(cb_x, cb_ex);
-        }
-        cb_wait_front(cb_ex, 1);  // should have 1 tile
-        cb_reserve_back(cb_xmm, Wt);
-        sub_bcast_cols_init_short(cb_x, cb_ex);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                sub_tiles_bcast_cols(cb_x, cb_ex, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
-                pack_tile(wtr, cb_xmm);
-            }
-            cb_push_back(cb_xmm, blk);
-            REL();
-        }
-        cb_pop_front(cb_ex, 1);
-        cb_pop_front(cb_x, Wt);
-
-#ifndef FUSE_PRE_ADD
-        reconfig_data_format_srca(cb_x, cb_xmm);
-#endif
-#endif
 
         /* (x - E[x])^2
          * compute temp = xmm*xmm = (x-E[x])^2
@@ -185,7 +138,8 @@ void MAIN {
             cb_reserve_back(cb_xmm2, blk);    // can probably use less space for this if we block
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_xmm, cb_xmm, wt + wtr, wt + wtr, wtr);
+                //第一次使用：计算x^2
+                mul_tiles(cb_xmm, cb_xmm, wt + wtr, wt + wtr, wtr);     
                 // mul_tiles(cb_xmm, cb_col1, wt+wtr, wt+wtr, wtr);
                 pack_tile(wtr, cb_xmm2);
             }
@@ -202,16 +156,20 @@ void MAIN {
          * IIRC E[x^2] - E[x]^2 trick was unstable
          * TODO(AP): can save space here by reusing CB
          */
+        // 计算E[x^2]归一化因子
         if constexpr (FLOAT32_DTYPE) {
             reconfig_data_format(cb_xmm2, cb_scaler);
         }
-        cb_reserve_back(cb_ex2, 1);
+        cb_reserve_back(cb_ex2, 1); //在输出缓冲区 cb_ex2 中预留 1 个 tile 的空间用于存储结果
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex2);
         ACQ();
-        cb_wait_front(cb_xmm2, Wt);
+        cb_wait_front(cb_xmm2, Wt); //累积等待整行的所有 Wt 个 tile 都准备好 这确保了归约操作可以访问完整的一行数据
         // cb_wait_front(cb_xmm, Wt);
+
+        // 外层循环以 blk 为步长遍历所有 tile
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // reduce
+            // 内层循环对每个 tile 调用 reduce_tile,将其累加到目标寄存器 dst0 中
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, wt + wtr, scaler0, dst0);
             }
@@ -247,6 +205,7 @@ void MAIN {
          * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
          * just need to bcast_mul xmm with cb_ex2pe
          */
+        // 分块归一化循环
         cb_wait_front(cb_ex2pe, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
@@ -265,6 +224,7 @@ void MAIN {
             mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
+                // 第二次使用：应用归一化算子
                 mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
                 pack_tile(wtr, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
             }
@@ -320,7 +280,7 @@ void MAIN {
             }
         }
         cb_pop_front(cb_ex2pe, 1);
-        cb_pop_front(cb_xmm, Wt);
+        cb_pop_front(cb_xmm, Wt);   //因为size是Wt，所以对于norm的输入来说，肯定是全程都在L1（norm也需要两遍的使用）
 
     }  // NCHt loop
     // cb_pop_front(cb_scaler, 1); // optional for correctness

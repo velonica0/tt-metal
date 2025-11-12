@@ -8,10 +8,10 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t NCHt = get_arg_val<uint32_t>(1);
-    uint32_t Wt = get_arg_val<uint32_t>(2);
-    uint32_t tile_offset = get_arg_val<uint32_t>(3);
+    uint32_t src_addr = get_arg_val<uint32_t>(0);       //输入张量在DRAM的地址
+    uint32_t NCHt = get_arg_val<uint32_t>(1);           //单core需要处理的 tile 行数
+    uint32_t Wt = get_arg_val<uint32_t>(2);             //宽度维度的 tile 数量
+    uint32_t tile_offset = get_arg_val<uint32_t>(3);    //当前 core 处理的起始 tile 行
 
     uint32_t gamma_addr = get_arg_val<uint32_t>(6);
     uint32_t beta_addr = get_arg_val<uint32_t>(7);
@@ -25,7 +25,7 @@ void kernel_main() {
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
     const DataFormat src0_data_format = get_dataformat(cb_id_in0);
 
-    constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
+    constexpr uint32_t blk = get_compile_time_arg_val(0);  // 读取操作处理多少个 tile  needed for correctness of softmax/LN kernels  
     constexpr auto src0_args = TensorAccessorArgs<1>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();

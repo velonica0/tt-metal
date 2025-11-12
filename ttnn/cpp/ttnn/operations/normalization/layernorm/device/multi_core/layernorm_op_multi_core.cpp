@@ -101,8 +101,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     // Kernels are configured to support BFLOAT8_B, but bad pcc so we need mixed precision support in compute
 
-    uint32_t Wt = W / TILE_WIDTH;
-    uint32_t Ht = H / TILE_HEIGHT;  //是每个样本在高度方向的 tile 行数（把高 H 按 TILE_HEIGHT 切成多少行）
+    uint32_t Wt = W / TILE_WIDTH;   //是每个样本在宽度方向的 tile 列数（把宽 W 按 TILE_WIDTH 切成多少列tile）
+    uint32_t Ht = H / TILE_HEIGHT;  //是每个样本在高度方向的 tile 行数（把高 H 按 TILE_HEIGHT 切成多少行tile）
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -117,6 +117,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
+    //确保生成Wt的最大约数，是core单次计算进行的tile数量
     uint32_t block_size = fp32_dest_acc_en ? find_max_divisor(Wt, 4) : find_max_divisor(Wt, 8);
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -305,6 +306,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         }
     }
 
+    // 启用FUSE_GAMMA
     if (gamma.has_value()) {
         reader_defines["FUSE_GAMMA"] = "1";
     }
@@ -491,6 +493,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
+        // 每一个core负责处理num_tile_rows_per_core行
         uint32_t num_tile_rows_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_1;
