@@ -105,7 +105,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     uint32_t in0_block_tiles = out_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
-    if (B * num_blocks > 1) {
+    if (B * num_blocks > 1) {   //如果B或者num_blcoks大于1，说明有多个块，要启动双缓冲机制
         in0_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
@@ -302,7 +302,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     }
 
+    // out_block_h=per_core_M out_subblock_h=1
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
+    // out_subblock_h=1 in0_block_w=1
+    // in0_block_num_tiles=per_core_M
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
 
     TT_FATAL(

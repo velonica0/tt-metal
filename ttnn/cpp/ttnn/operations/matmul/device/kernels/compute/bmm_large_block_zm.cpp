@@ -31,7 +31,7 @@ void MAIN {
 
         for (uint32_t block = 0; block < num_blocks; block++) {
             bool last_out = block == (num_blocks - 1);
-
+            // L1一次性接收的数量，block变量的迭代是在reader kernel
             cb_wait_front(tt::CBIndex::c_0, in0_block_num_tiles);
             cb_wait_front(tt::CBIndex::c_1, in1_block_num_tiles);
             // subblock间的迭代
@@ -41,6 +41,7 @@ void MAIN {
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     acquire_dst();
 
+                    // CB24充当临时累加区域，防止上一轮的数据在DST计算时被覆盖
                     if (enable_reload) {
                         copy_tile_to_dst_init_short_with_dt(tt::CBIndex::c_1, tt::CBIndex::c_24);
                         cb_wait_front(tt::CBIndex::c_24, out_subblock_num_tiles);
@@ -53,6 +54,7 @@ void MAIN {
 
                     // Compute output sub-block from in0_subblock x in1_subblock
                     // 计算单个subblock的矩阵乘积
+                    // subblock只在输出矩阵上，因此是二维的，没有K维度
                     int dst_index = 0;
                     int in0_index_h_offset = 0;
                     for (uint32_t h = 0; h < out_subblock_h; h++) {
