@@ -913,6 +913,7 @@ class ModelArgs:
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            # 没有显式指定out_block_h和out_block_w，则默认和per_core_M、per_core_N一致
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
@@ -921,6 +922,7 @@ class ModelArgs:
                 per_core_M=max(
                     1,
                     8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
+                    # 如果seq_len大于MAX_QKV_MM_SEQ_LEN，则会对权重进行reshape，在batch上会有多个块
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
                     self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width

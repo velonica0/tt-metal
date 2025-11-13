@@ -99,9 +99,9 @@ void MAIN {
     constexpr uint32_t in1_block_num_tiles =
         get_compile_time_arg_val(5);                               // out_subblock_w*in0_block_w* in1_num_subblocks;
     constexpr uint32_t in1_block_w = get_compile_time_arg_val(6);  // out_subblock_w*in1_num_subblocks
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(7);     // outer inner dim (in inner dim blocks)
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);         // outer inner dim (in inner dim blocks)
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(9);         // outer inner dim (in inner dim blocks)
+    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(7);     // outer inner dim (in inner dim blocks) block在K的个数  =  num_blocks
+    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);         // outer inner dim (in inner dim blocks) block在W的个数
+    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(9);         // outer inner dim (in inner dim blocks) block在H的个数
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(10);          // inner row block size in tiles
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);          // inner column block size in tiles
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(12);  // out_subblock_h * out_subblock_w;
@@ -187,7 +187,9 @@ void MAIN {
                     }
 #endif
 
+                    // in0_block_num_tiles=per_core_M
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
+                    // in1_block_num_tiles=per_core_N
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
                     int in0_index_subblock_offset = 0;
