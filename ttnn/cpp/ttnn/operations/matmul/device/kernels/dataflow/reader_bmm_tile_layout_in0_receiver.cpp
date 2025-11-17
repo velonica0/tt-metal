@@ -40,6 +40,7 @@ void kernel_main() {
         get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
 
     for (uint32_t b = 0; b < batch; ++b) {
+        // 这个机制在稀疏矩阵乘法中使用,当 get_batch_from_reader 编译时参数为 true 时启用。
         if constexpr (get_batch_from_reader) {
             // This means we have unstructured sparsity.
             // The compute kernel needs to be made aware whether this batch is valid or not.

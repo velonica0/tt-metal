@@ -61,7 +61,15 @@ void MAIN {
                         for (uint32_t w = 0; w < out_subblock_w; w++) {
                             int in1_index_inner_dim_offset = 0;
                             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                                // reader kernel只会读取两个block，在这个地方按照两个方向进行分配
+
+                                // in0_index_subblock_offset: 当前 subblock 的起始偏移量,每处理完一个 subblock 后增加 in0_subblock_num_tiles
+                                // in0_index_h_offset: 当前行在 subblock 中的偏移量,每处理完一行后增加 in0_block_w
+                                // inner_dim: 内部维度的索引 (0 到 in0_block_w-1),对应矩阵乘法中的 K 维度
                                 int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
+                                // in1_index_subblock_offset: 当前 subblock 的起始偏移量,每处理完一个 subblock 后增加 out_subblock_w
+                                // in1_index_inner_dim_offset: 内部维度的偏移量,每处理一个 inner_dim 后增加 in1_per_core_w,用于在 K 维度上移动 
+                                // w: 列索引 (0 到 out_subblock_w-1),对应矩阵乘法中的 N 维度
                                 int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
                                 matmul_tiles(
                                     tt::CBIndex::c_0,
