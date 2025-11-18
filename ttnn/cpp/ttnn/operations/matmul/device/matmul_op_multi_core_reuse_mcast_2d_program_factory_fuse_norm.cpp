@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <cstdint>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -59,12 +60,17 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const ttnn::Tensor>& gamma,  // scaler
+    const std::optional<const ttnn::Tensor>& beta,   // bias
+    float eps
+        ) {
     using tt::tt_metal::TensorMemoryLayout;
 
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
+    //普通的ttnn.linear不会调用
     bool fuse_op = fused_op_signaler.has_value();
 
     TensorMemoryLayout in0_memory_layout = in0_buffer->buffer_layout();
@@ -156,6 +162,27 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     CoreRange all_cores_with_work(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y + num_cores_with_work_r - 1});
+
+
+    // rmsnorm多出的参数
+    // uint32_t a_addr = in0_buffer->address();
+    uint32_t num_tile_rows_per_core = per_core_M;
+    uint32_t curr_row = 0;  //curr_row += num_tile_rows_per_core;
+    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
+
+    // scalar
+    float winv = 1.0f / K;
+    auto bfloat_winv_value = bfloat16(winv);
+    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
+    // epsilon
+    union {
+        float f;
+        uint32_t u;
+    } e{};
+    e.f = eps;
+
+
+    
 
     ////////////////////////////////////////////////////////////////////////////
     //                      IN0 SHARDED SENDER/RECEIVER
@@ -356,6 +383,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)B  // batch
         };
     } else {
+        //使用的
         in0_sender_compile_time_args = {
             // in0 tensor args
             (std::uint32_t)1,                // in0_tensor_stride_w
@@ -1046,7 +1074,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     core,
                     mm_in0_sender_args);  // RISCV_0_default
             }
-        } else if (in1_idx == 0) {
+        }
+        else if (in1_idx == 0) {
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
                 (std::uint32_t)in0_buffer->address(),
@@ -1067,11 +1096,31 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             // sparsity args
             mm_in0_sender_args.push_back(0);  // sparsity_addr
 
+            /*
+            norm额外的参数
+            */
+            // mm_in0_sender_args.push_back(a_addr);    //in0_buffer->address();已经传递
+            // mm_in0_sender_args.push_back(num_tile_rows_per_core);//pre_core_M 已经传递
+            // mm_in0_sender_args.push_back(Wt);//就是K，matmul中是num_blocks(num_blocks_inner_dim)
+            // mm_in0_sender_args.push_back(curr_row * Wt);//用于寻址，matmul做得更好
+            mm_in0_sender_args.push_back(packed_winv_value);
+            mm_in0_sender_args.push_back(e.u);
+            mm_in0_sender_args.push_back(gamma_dram_addr);
+            // mm_in0_sender_args.push_back(beta_dram_addr);
+
+            if (gamma.has_value() and gamma.value().layout() == ttnn::Layout::ROW_MAJOR) {
+                auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
+                mm_in0_sender_args.push_back(gamma_stick_size);
+            }
+
+
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
 
             tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_0_default
+
+            curr_row += num_tile_rows_per_core;
 
             // in0 receiver
         } else {

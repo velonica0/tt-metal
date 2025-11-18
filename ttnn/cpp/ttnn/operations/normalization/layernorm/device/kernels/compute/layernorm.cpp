@@ -29,6 +29,7 @@
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
+// rmsnorm的compute kernel
 namespace NAMESPACE {
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);

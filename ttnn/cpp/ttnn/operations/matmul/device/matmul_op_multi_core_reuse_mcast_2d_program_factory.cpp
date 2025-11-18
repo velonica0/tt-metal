@@ -123,6 +123,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         out_CB_tiles = out_shard_tiles;
     }
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
+    // 循环缓冲区的大小被配置为能容纳整个 block 的所有 subblocks
     uint32_t interm0_CB_tiles = out_block_tiles;  // No double buffer
     uint32_t interm0_CB_size = interm0_CB_tiles * interm0_single_tile_size;
 

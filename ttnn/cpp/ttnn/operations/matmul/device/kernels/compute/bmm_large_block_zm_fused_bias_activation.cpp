@@ -293,6 +293,7 @@ void MAIN {
 #endif
 
                                 uint32_t start_dst_index = 0;
+                                //将dst寄存器打包到CB
                                 pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
