@@ -13,6 +13,8 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
+#include "debug/dprint.h"  
+
 // 与ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp进行融合
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -93,6 +95,7 @@ void kernel_main() {
     constexpr auto in0_args = TensorAccessorArgs<25>();
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<sparsity_args.next_compile_time_args_offset()>();
+    constexpr uint32_t stick_size = get_compile_time_arg_val(gamma_args.next_compile_time_args_offset());
 
     // Reader will use this CB to pass the number of non-zero (nnz) entries in the sparsity tensor.
     constexpr uint32_t nnz_cb_id = tt::CBIndex::c_25;
@@ -170,6 +173,9 @@ void kernel_main() {
     uint32_t in0_start_address = get_write_ptr(cb_id_in0);
 #endif  // IN0_SHARDED
 #endif  // SKIP_MCAST
+
+    DPRINT << "Reader kernel started" << ENDL();
+    DPRINT << "in0_block_w: " << in0_block_w << ENDL(); 
 
     uint32_t l1_write_addr_sparsity = 0;
     // if constexpr (batchB > 0) {
