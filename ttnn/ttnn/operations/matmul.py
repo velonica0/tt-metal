@@ -15,6 +15,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig = ttnn._ttnn.operations.matmul.Matm
 MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig = (
     ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
 )
+MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm
 
 
 def _get_golden_activation_function(activation):

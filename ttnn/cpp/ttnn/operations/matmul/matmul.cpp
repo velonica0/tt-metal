@@ -217,6 +217,56 @@ Tensor MatmulOperation::invoke(
         optional_output_tensor);
 }
 
+Tensor LinearNormOperation::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& bias,
+    const bool transpose_a,
+    const bool transpose_b,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const DataType> dtype,
+    const std::optional<const MatmulProgramConfig>& program_config,
+    const std::optional<const std::string>& activation,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const CoreGrid> core_grid,
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    std::optional<ttnn::Tensor> optional_output_tensor,
+    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const std::optional<const Tensor>& gamma,
+    float epsilon) {
+    std::optional<CoreCoord> user_core_coord;
+    if (core_grid.has_value()) {
+        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+    }
+    bool b_is_batched = detail::is_input_batched(input_tensor_b.logical_shape());
+    TT_FATAL(!(b_is_batched && bias.has_value()), "Batched input not supported when bias exists (linear operation).");
+
+    return bound_matmul(
+        input_tensor_a,
+        input_tensor_b,
+        bias,
+        Matmul{
+            program_config,
+            /*bcast_batch=*/std::nullopt,
+            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
+            dtype,
+            compute_kernel_config,
+            /*untilize_out=*/false,
+            user_core_coord,
+            get_fused_activation(activation),
+            /*user_run_batched=*/false,
+            transpose_a,
+            transpose_b,
+            output_tile,
+            global_cb,
+            sub_device_id,
+            gamma,
+            epsilon
+            },
+        optional_output_tensor);
+}
+
 Tensor LinearOperation::invoke(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,

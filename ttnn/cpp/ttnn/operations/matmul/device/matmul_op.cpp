@@ -10,6 +10,7 @@
 #include <optional>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <type_traits>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -1443,20 +1444,11 @@ Matmul create_matmul_struct(
         get_output_tile(output_mem_config, in0_tile, in1_tile, parameters.output_tile, optional_output_tensor_tile);
 
     return Matmul{
-        parameters.program_config,
-        broadcast_batch,
-        output_mem_config,
-        output_dtype,
-        kernel_config_val,
-        parameters.untilize_out,
-        parameters.user_core_coord,
-        parameters.user_fused_activation,
-        parameters.user_run_batched,
-        parameters.transpose_a,
-        parameters.transpose_b,
-        output_tile,
-        parameters.global_cb,
-        parameters.sub_device_id};
+        parameters.program_config, broadcast_batch, output_mem_config, output_dtype, kernel_config_val,
+            parameters.untilize_out, parameters.user_core_coord, parameters.user_fused_activation,
+            parameters.user_run_batched, parameters.transpose_a, parameters.transpose_b, output_tile,
+            parameters.global_cb, parameters.sub_device_id,
+            parameters.gamma, parameters.epsilon};
 }
 
 Tensor matmul(
@@ -2696,8 +2688,34 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                     this->untilize_out);
 
                 return create_homogenous_mesh_workload(mcast_mm_program, tensor_coords);
+            }
+            else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm>){
+                auto mcast_mm_program = matmul_multi_core_reuse_mcast_2d_optimized_fuse_norm(
+                    input_tensor_a,
+                    input_tensor_b,
+                    bias,
+                    output_tensor,
+                    broadcast_batch,
+                    program_config.compute_with_storage_grid_size,
+                    this->compute_kernel_config.value(),
+                    program_config.in0_block_w,
+                    program_config.out_subblock_h,
+                    program_config.out_subblock_w,
+                    program_config.out_block_h,
+                    program_config.out_block_w,
+                    program_config.per_core_M,
+                    program_config.per_core_N,
+                    program_config.fuse_batch,
+                    program_config.transpose_mcast,
+                    program_config.fused_activation,
+                    this->untilize_out,
+                    this->gamma,
+                    this->epsilon
+                );
 
-            } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                return create_homogenous_mesh_workload(mcast_mm_program, tensor_coords);
+            }
+            else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 const std::vector<Tensor> input_tensors_b(input_tensors.begin() + 1, input_tensors.end());
                 auto mcast_mm_program = matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a,

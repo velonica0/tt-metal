@@ -135,6 +135,29 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out);
+
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_fuse_norm(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& bias,
+    Tensor& output_tensor,
+    bool bcast_batch,
+    CoreCoord compute_with_storage_grid_size,
+    DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t in0_block_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t out_block_h,
+    uint32_t out_block_w,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    bool fuse_batch,
+    bool transpose_mcast,
+    std::optional<UnaryWithParam> fused_activation,
+    bool untilize_out,
+    const std::optional<const Tensor>& gamma,  // scaler
+    float eps);
+
 tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -202,6 +225,20 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool fuse_batch = true;
 };
 
+struct MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm {
+    CoreCoord compute_with_storage_grid_size;
+    std::size_t in0_block_w{};
+    std::size_t out_subblock_h{};
+    std::size_t out_subblock_w{};
+    std::size_t out_block_h{};
+    std::size_t out_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
+    bool transpose_mcast{};
+    std::optional<UnaryWithParam> fused_activation;
+    bool fuse_batch = true;
+};
+
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
@@ -247,6 +284,7 @@ using MatmulProgramConfig = std::variant<
     MatmulMultiCoreProgramConfig,
     MatmulMultiCoreReuseProgramConfig,
     MatmulMultiCoreReuseMultiCastProgramConfig,
+    MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm,
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     MatmulMultiCoreReuseFuseRMSNormConfig>;
@@ -266,6 +304,8 @@ struct Matmul {
     const std::optional<const tt::tt_metal::Tile> output_tile;
     const std::optional<const GlobalCircularBuffer> global_cb;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    const std::optional<const Tensor> gamma = std::nullopt;
+    const float epsilon = 1e-5f;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
