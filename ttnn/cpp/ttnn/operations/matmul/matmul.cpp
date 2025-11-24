@@ -185,6 +185,8 @@ Tensor MatmulOperation::invoke(
     std::optional<Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    log_info(tt::LogOp, "MatmulOperation::invoke");
+    
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -235,6 +237,8 @@ Tensor LinearNormOperation::invoke(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<const Tensor>& gamma,
     float epsilon) {
+    log_info(tt::LogOp, "LinearNormOperation::invoke");
+    
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -283,6 +287,8 @@ Tensor LinearOperation::invoke(
     std::optional<ttnn::Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    log_info(tt::LogOp, "LinearOperation::invoke");
+    
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);

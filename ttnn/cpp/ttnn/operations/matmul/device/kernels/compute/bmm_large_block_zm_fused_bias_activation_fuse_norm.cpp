@@ -176,8 +176,8 @@ void MAIN {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
-    DPRINT << "Compute kernel started" << ENDL();
-    DPRINT << "in0_block_w: " << in0_block_w << ENDL(); 
+    // DPRINT << "Compute kernel started" << ENDL();
+    // DPRINT << "in0_block_w: " << in0_block_w << ENDL(); 
 
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -214,7 +214,9 @@ void MAIN {
             // 结果存入 cb_xmm2
             mul_tiles_init(cb_xmm, cb_xmm);
             for (uint32_t wt = 0; wt < in0_block_w * num_blocks_inner_dim; wt += in0_block_w) {     //uint32_t num_blocks = K / in0_block_w;
-                cb_wait_front(cb_xmm, wt + in0_block_w);  // cumulative wait
+                DPRINT_UNPACK(DPRINT << "cb_wait_front(cb_xmm, wt + in0_block_w);" << ENDL();)
+                cb_wait_front(cb_xmm, wt + in0_block_w);                                            // cumulative wait
+                DPRINT_PACK(DPRINT << "cb_reserve_back(cb_xmm2, in0_block_w);" << ENDL();)
                 cb_reserve_back(cb_xmm2, in0_block_w);    // can probably use less space for this if we block
                 ACQ();
                 for (uint32_t wtr = 0; wtr < in0_block_w; wtr++) {
@@ -223,6 +225,7 @@ void MAIN {
                     // mul_tiles(cb_xmm, cb_col1, wt+wtr, wt+wtr, wtr);
                     pack_tile(wtr, cb_xmm2);
                 }
+                DPRINT_PACK(DPRINT << "cb_push_back(cb_xmm2, in0_block_w);" << ENDL();)
                 cb_push_back(cb_xmm2, in0_block_w);
                 REL();
             }
@@ -233,9 +236,11 @@ void MAIN {
             if constexpr (FLOAT32_DTYPE) {
                 reconfig_data_format(cb_xmm2, cb_scaler);
             }
-            cb_reserve_back(cb_ex2, 1); //在输出缓冲区 cb_ex2 中预留 1 个 tile 的空间用于存储结果
+            cb_reserve_back(cb_ex2, 1);  // 在输出缓冲区 cb_ex2 中预留 1 个 tile 的空间用于存储结果
+            DPRINT_MATH(DPRINT << "reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex2);" << ENDL();)
             reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex2);
             ACQ();
+            DPRINT_UNPACK(DPRINT << "cb_wait_front(cb_xmm2, in0_block_w * num_blocks_inner_dim);" << "in0_block_w:" << in0_block_w << "num_blocks_inner_dim:" << num_blocks_inner_dim << ENDL();)
             cb_wait_front(cb_xmm2, in0_block_w * num_blocks_inner_dim); //累积等待整行的所有 in0_block_w * num_blocks_inner_dim 个 tile 都准备好 这确保了归约操作可以访问完整的一行数据
             // cb_wait_front(cb_xmm, in0_block_w * num_blocks_inner_dim);
 
@@ -247,8 +252,10 @@ void MAIN {
                     reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, wt + wtr, scaler0, dst0);
                 }
             }
+            DPRINT_UNPACK(DPRINT << "cb_pop_front(cb_xmm2, in0_block_w * num_blocks_inner_dim);" << ENDL();)
             cb_pop_front(cb_xmm2, in0_block_w * num_blocks_inner_dim);
             pack_tile(dst0, cb_ex2);
+            DPRINT_MATH(DPRINT << "reduce_uninit();" << ENDL();)
             reduce_uninit();
             REL();
 
@@ -278,7 +285,9 @@ void MAIN {
             * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
             * just need to bcast_mul xmm with cb_ex2pe
             */
-            // 第三步：分块归一化循环，这个循环将 cb_xmm 与归一化因子 cb_ex2pe (即 1/√(E[x²]+ε)) 相乘，结果存入 cb_fusion
+            // 第三步：分块归一化循环，这个循环将 cb_xmm 与归一化因子 cb_ex2pe (即 1/√(E[x²]+ε)) 相乘，结果存入
+            // cb_fusion
+            DPRINT << "cb_wait_front(cb_ex2pe, 1);" << ENDL();
             cb_wait_front(cb_ex2pe, 1);
             for (uint32_t wt = 0; wt < in0_block_w * num_blocks_inner_dim; wt += in0_block_w) {
                 // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));

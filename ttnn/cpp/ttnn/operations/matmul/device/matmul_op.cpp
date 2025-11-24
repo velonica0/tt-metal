@@ -1457,6 +1457,8 @@ Tensor matmul(
     const std::optional<const Tensor>& bias,
     const struct Matmul& parameters,
     const std::optional<Tensor>& optional_output_tensor) {
+    log_info(tt::LogOp, "matmul_op.cpp: Tensor matmul");
+    
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias);
@@ -2644,8 +2646,10 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
     return std::visit(
         [&](const auto& program_config) -> tt::tt_metal::operation::CacheableMeshWorkload<std::vector<Tensor>> {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            log_info(tt::LogOp, "Use program config: {}", program_config);
             if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulMultiCoreReuseProgramConfig!");
+                log_info(tt::LogOp, "Go MatmulMultiCoreReuseProgramConfig");
                 // TODO: fuse_batch doesn't do anything for this variant! Code is
                 // doing fuse_batch=false
                 auto bmm_program = bmm_multi_core_reuse_optimized(
@@ -2667,6 +2671,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                 return create_homogenous_mesh_workload(bmm_program, tensor_coords);
 
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                log_info(tt::LogOp, "Go MatmulMultiCoreReuseMultiCastProgramConfig");
                 auto mcast_mm_program = matmul_multi_core_reuse_mcast_2d_optimized(
                     input_tensor_a,
                     input_tensor_b,
@@ -2690,6 +2695,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                 return create_homogenous_mesh_workload(mcast_mm_program, tensor_coords);
             }
             else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm>){
+                log_info(tt::LogOp, "Go MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm");
                 auto mcast_mm_program = matmul_multi_core_reuse_mcast_2d_optimized_fuse_norm(
                     input_tensor_a,
                     input_tensor_b,
@@ -2714,8 +2720,8 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                 );
 
                 return create_homogenous_mesh_workload(mcast_mm_program, tensor_coords);
-            }
-            else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+            } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                log_info(tt::LogOp, "Go MatmulMultiCoreReuseMultiCast1DProgramConfig");
                 const std::vector<Tensor> input_tensors_b(input_tensors.begin() + 1, input_tensors.end());
                 auto mcast_mm_program = matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a,
@@ -2749,6 +2755,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                                      MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 // DRAM Sharded Matmul generates different programs across devices, since it depends on harvesting.
                 // Account for this by creating a heterogenous MeshWorkload.
+                log_info(tt::LogOp, "Go MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig");
                 auto workload_device_range = get_range_from_mesh_coords(tensor_coords);
                 tt::tt_metal::distributed::MeshWorkload dram_sharded_mm_workload;
                 std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks;

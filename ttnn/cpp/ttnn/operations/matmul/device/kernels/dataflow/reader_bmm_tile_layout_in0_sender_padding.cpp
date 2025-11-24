@@ -10,6 +10,8 @@
 #include "pad_tile.hpp"
 #include "ckernel.h"
 
+#include "debug/dprint.h" 
+
 void kernel_main() {
     uint32_t rt_args_idx = 0;
     // in0 tensor args
@@ -141,6 +143,9 @@ void kernel_main() {
     uint32_t in0_start_address = get_write_ptr(cb_id_in0);
 #endif  // IN0_SHARDED
 #endif  // SKIP_MCAST
+
+    DPRINT << "Tenstorrent Reader kernel started" << ENDL();
+    DPRINT << "in0_block_w: " << in0_block_w << ENDL(); 
 
     uint32_t l1_write_addr_sparsity = 0;
     if constexpr (batchB > 0) {

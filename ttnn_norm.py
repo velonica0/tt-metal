@@ -11,8 +11,7 @@ torch_output_tensor = ttnn.to_torch(output_tensor)
 
 torch_input_tensor_b = torch.rand(7, 1, dtype=torch.float32)
 input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-matmul_output_tensor = input_tensor_a @ input_tensor_b
-torch_matmul_output_tensor = ttnn.to_torch(matmul_output_tensor)
+
 
 program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm(
     compute_with_storage_grid_size=(8, 8),
@@ -21,13 +20,16 @@ program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm(
     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
     per_core_M=8,
     per_core_N=8,
+    out_block_h=1,
     transpose_mcast=False,
     fused_activation=None,
     fuse_batch=False,
 )
+
+print("MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm")
+
 linear_norm_output_tensor = ttnn.linear_norm(input_tensor_a, input_tensor_b, gamma=None, epsilon=1e-5,program_config=program_config)
 torch_linear_norm_output_tensor = ttnn.to_torch(linear_norm_output_tensor)
 
-print(torch_matmul_output_tensor)
 
 ttnn.close_device(device)

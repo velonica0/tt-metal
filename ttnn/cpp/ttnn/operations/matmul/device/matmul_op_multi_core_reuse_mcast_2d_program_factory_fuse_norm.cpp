@@ -422,12 +422,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(in0_sender_compile_time_args);
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+    if (gamma.has_value() and gamma.value().layout() == ttnn::Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         in0_sender_compile_time_args.push_back(gamma_stick_size);
     }
     else {
-        in0_sender_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(DataType::BFLOAT8_B)));
+        in0_sender_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(ttnn::DataType::BFLOAT8_B)));
     }
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -653,6 +653,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
     tt::tt_metal::KernelHandle mm_kernel_in0_sender_id = 0;
     tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
     if (in0_block_sharded) {
+        log_info(tt::LogOp, "Go reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded");
         mm_kernel_in0_sender_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
@@ -678,6 +679,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
                     .defines = mm_kernel_in0_sender_sharded_defines});
         }
     } else {
+        log_info(tt::LogOp, "Go reader_bmm_tile_layout_in0_sender_padding_fuse_norm");
         if (fuse_op) {
             if (fused_op_signaler->is_all_gather()) {
                 // Create semaphores
@@ -700,6 +702,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
                 .defines = mm_kernel_in0_sender_interleaved_defines});
     }
 
+    log_info(tt::LogOp, "Go reader_bmm_tile_layout_in1_sender_writer_padding");
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
@@ -712,6 +715,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
     if (in1_receiver.num_cores() > 0) {
+        log_info(tt::LogOp, "Go reader_bmm_tile_layout_in1_receiver_writer_padding");
         mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
@@ -727,6 +731,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
 
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
     if (!in0_block_sharded and in0_receiver_interleaved.num_cores() > 0) {
+        log_info(tt::LogOp, "Go reader_bmm_tile_layout_in0_receiver");
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
@@ -742,6 +747,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_other_noc_setup_id = mm_kernel_in0_receiver_id;
 
     if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+        log_info(tt::LogOp, "Go reader_bmm_tile_layout_in1_receiver_writer_padding");
         mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
@@ -753,6 +759,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
                 .compile_args = in1_receiver_writer_compile_time_args,
                 .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines});
 
+        log_info(tt::LogOp, "Go reader_bmm_tile_layout_in0_receiver");
         mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
@@ -806,6 +813,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
     // bool fp32_dest_acc_en = true;
     // Gelu currently has better accuracy when run in approx mode
     // bool math_approx_mode = false;
+    log_info(tt::LogOp, "Go bmm_large_block_zm_fused_bias_activation_fuse_norm");
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_fuse_norm.cpp",
@@ -964,6 +972,44 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
                 .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
                 .set_tile_dims(in0_intermediate_cb_index, in0_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
+    }
+    {
+        uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+        uint32_t in3_cb_index = tt::CBIndex::c_3;
+        tt::tt_metal::CircularBufferConfig in3_cb_config =
+        tt::tt_metal::CircularBufferConfig(bfloat16_tile_size, {{in3_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(in3_cb_index, bfloat16_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
+    }
+    {
+        uint32_t im5_t = 2 * in0_block_w;  // for buffering to/from *gamma/+beta
+        uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
+        uint32_t im1_t = 2;
+        uint32_t in2_t = 2;  // scaler for reduce coming from reader    用于归约
+        uint32_t in3_t = 2;  // epsilon coming from reader              用于eps
+        uint32_t im2_t = 2;  //
+        
+        tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        uint32_t single_tile_size = tt::tile_size(cb_data_format);
+        tt::tt_metal::CircularBufferConfig cb_intermed2_config =
+        tt::tt_metal::CircularBufferConfig(im2_t * single_tile_size, {{tt::CBIndex::c_19, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_19, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed2_config);
+
+        tt::tt_metal::CircularBufferConfig c_intermed3_config =
+            tt::tt_metal::CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_20, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_20, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, c_intermed3_config);
+
+        tt::tt_metal::CircularBufferConfig c_intermed4_config =
+            tt::tt_metal::CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_21, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_21, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, c_intermed4_config);
+
+        tt::tt_metal::CircularBufferConfig c_intermed5_config =
+            tt::tt_metal::CircularBufferConfig(im5_t * single_tile_size, {{tt::CBIndex::c_22, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_22, single_tile_size);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, c_intermed5_config);
     }
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
