@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     // TODO(AP): this will not work for all Wts possibly, but should work for Wt=8, 12, 16, 32
     // TODO(AP): can also add support for block_size=7 -> 63, 28
-    uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size
+    uint32_t WtB = tt::div_up(Wt, block_size) * block_size;  // Wt padded to be divisible by block size 这行代码计算 WtB,即将 Wt(宽度的 tile 数量)向上填充(pad)到 block_size 的整数倍。
     bool large_tensor_needed = false;
     //rmsnorm.py中的self.weigth(gamma)是row_major布局
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or

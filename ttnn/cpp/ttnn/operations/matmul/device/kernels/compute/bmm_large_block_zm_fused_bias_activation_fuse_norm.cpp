@@ -70,39 +70,6 @@ FORCE_INLINE void reload_from_cb_to_dst(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
-inline void reblock_and_untilize(
-    uint32_t num_out_subblocks_in_col,
-    uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_h,
-    uint32_t interm_cb_id,
-    uint32_t out_cb_id) {
-    uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
-    cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
-
-    uint32_t within_block_index = 0;
-    for (uint32_t h = 0; h < out_subblock_h; h++) {
-        uint32_t block_offset = 0;
-
-        cb_reserve_back(out_cb_id, out_block_w);
-        for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
-            tile_regs_acquire();
-            for (uint32_t w = 0; w < out_subblock_w; w++) {
-                uint32_t tile_index = block_offset + within_block_index + w;
-                copy_tile(interm_cb_id, tile_index, w);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_untilize_dest<out_subblock_w, out_block_w>(out_cb_id, 1, n);
-            tile_regs_release();
-            block_offset += out_subblock_num_tiles;
-        }
-        cb_push_back(out_cb_id, out_block_w);
-
-        within_block_index += out_subblock_w;
-    }
-    cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
-}
 
 void MAIN {
 
@@ -170,26 +137,26 @@ void MAIN {
     constexpr bool spill = num_blocks_inner_dim > 1;
 
     // DPRINT << "Compute kernel started" << ENDL();
-    DPRINT << "do_gamma: " << do_gamma << ENDL(); 
+    // DPRINT << "num_blocks_w_dim"<<num_blocks_w_dim<<ENDL();
 
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
-        if constexpr (get_batch_from_reader) {
-            // Check whether this batch is valid
-            cb_wait_front(nnz_cb_id, 1);
-            tensix_sync();
-            cb_get_tile(nnz_cb_id, 0, &nnz_addr_ptr);
-            // The first 4 entries have metadata, so we look at the 5th entry
-            // for our value pushed from the reader.
-            uint32_t nnz = nnz_addr_ptr[4];
-            cb_release_tile(nnz_cb_id);
-            cb_pop_front(nnz_cb_id, 1);
+        // if constexpr (get_batch_from_reader) {
+        //     // Check whether this batch is valid
+        //     cb_wait_front(nnz_cb_id, 1);
+        //     tensix_sync();
+        //     cb_get_tile(nnz_cb_id, 0, &nnz_addr_ptr);
+        //     // The first 4 entries have metadata, so we look at the 5th entry
+        //     // for our value pushed from the reader.
+        //     uint32_t nnz = nnz_addr_ptr[4];
+        //     cb_release_tile(nnz_cb_id);
+        //     cb_pop_front(nnz_cb_id, 1);
 
-            if (nnz == 0) {
-                continue;
-            }
-        }
+        //     if (nnz == 0) {
+        //         continue;
+        //     }
+        // }
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {// 8
 
@@ -206,8 +173,13 @@ void MAIN {
             // 第一步：计算 x²
             // 结果存入 cb_xmm2
             mul_tiles_init(cb_xmm, cb_xmm);
-            for (uint32_t wt = 0; wt < in0_block_w * num_blocks_inner_dim; wt += in0_block_w) {     // num_blocks_inner_dim = num_blocks = K / in0_block_w = K
+            DPRINT_UNPACK(DPRINT << "num_blocks_inner_dim"<< num_blocks_inner_dim << ENDL());
+            for (uint32_t wt = 0; wt < in0_block_w * num_blocks_inner_dim; wt += in0_block_w) {     // num_blocks_inner_dim = num_blocks = K / in0_block_w = K(Kt)
+                DPRINT_UNPACK(DPRINT << "cb_wait_front(cb_xmm, wt + in0_block_w);"<<", cb_xmm:"<<static_cast<uint32_t>(cb_xmm)<<", wt:"<<wt<<", in0_block_w:"<<in0_block_w << ENDL());
+                WAYPOINT("CWFW");
                 cb_wait_front(cb_xmm, wt + in0_block_w);  // cumulative wait
+                WAYPOINT("CWFD");
+                DPRINT_PACK(DPRINT << "cb_reserve_back(cb_xmm2, in0_block_w);"<<", cb_xmm2:"<<static_cast<uint32_t>(cb_xmm2)<<", in0_block_w:"<<in0_block_w << ENDL());
                 cb_reserve_back(cb_xmm2, in0_block_w);  // can probably use less space for this if we block
                 ACQ();
                 for (uint32_t wtr = 0; wtr < in0_block_w; wtr++) {
@@ -329,170 +301,182 @@ void MAIN {
                 }
             }
             cb_pop_front(cb_ex2pe, 1);
-            // DPRINT_UNPACK(DPRINT << "cb_pop_front(cb_ex2pe, 1);" << ENDL());
+            DPRINT_UNPACK(DPRINT << "cb_pop_front(cb_ex2pe, 1);" << ", cb_ex2pe:"<<static_cast<uint32_t>(cb_ex2pe) << ENDL());
             cb_pop_front(cb_xmm, in0_block_w * num_blocks_inner_dim);   //因为size是Wt，所以对于norm的输入来说，肯定是全程都在L1（norm也需要两遍的使用）
-            // DPRINT_UNPACK(DPRINT << "cb_pop_front(cb_xmm, in0_block_w * num_blocks_inner_dim);" << ENDL());
+            DPRINT_UNPACK(DPRINT << "cb_pop_front(cb_xmm, in0_block_w * num_blocks_inner_dim);" << ", cb_xmm:"<<static_cast<uint32_t>(cb_xmm)<<", in0_block_w * num_blocks_inner_dim:"<<in0_block_w * num_blocks_inner_dim << ENDL());
 
 //norm与matmul的分隔符-----------------------------------------------------------------------------------------------------------------------------
 
-            for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                bool enable_reload = false;
-                uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
+//             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {    // 1
+//                 bool enable_reload = false;
+//                 uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
 
 
 
-                if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
-                    PACK((pack_reconfig_data_format(mm_partials_cb_id)));
-                }
+//                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
+//                     PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+//                 }
 
-                for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
-                    bool last_out = block == (num_blocks_inner_dim - 1);
+//                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {   // num_blocks_inner_dim = num_blocks = K / in0_block_w = K(Kt)
+//                     bool last_out = block == (num_blocks_inner_dim - 1);
+
+//                     // in0_block_num_tiles=per_core_M
+//                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
+//                     // DPRINT_UNPACK(DPRINT << "cb_wait_front(in0_cb_id, in0_block_num_tiles);" << ENDL());
+//                     // in1_block_num_tiles=per_core_N
+//                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
+//                     // DPRINT_UNPACK(DPRINT << "cb_wait_front(in1_cb_id, in1_block_num_tiles);" << ENDL());
+
+//                     int in0_index_subblock_offset = 0;
+//                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {// 1（与K无关）
+//                         int in1_index_subblock_offset = 0;
+//                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {// 8（与K无关）
+//                             DPRINT_PACK(DPRINT << "in1_subblock: " << in1_subblock << ", in1_num_subblocks: " << in1_num_subblocks << ENDL());
+//                             // 现在还没有从该循环出去
+//                             tile_regs_acquire();
+//                             DPRINT_MATH(DPRINT << "tile_regs_acquire();" <<"in1_subblock: "<<in1_subblock<< ENDL());
+//                             if (enable_reload) {
+//                                 reload_from_cb_to_dst(
+//                                     in0_cb_id,
+//                                     in1_cb_id,
+//                                     mm_partials_cb_id,
+//                                     in1_transpose_tile,
+//                                     out_subblock_num_tiles,
+//                                     out_subblock_w,
+//                                     out_subblock_h,
+//                                     in0_block_w);
+//                             }
+
+// #ifndef SKIP_COMPUTE
+//                             // Compute output sub-block
+//                             uint32_t dst_index =
+//                                 0;  // start at 0, each call to matmul_block internally increments dst_index
+//                             uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
+//                             uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
+//                             // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
+//                             for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
+//                                 // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
+//                                 // accumulation is done by iterating matmul_block across inner dim
+//                                 // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride
+//                                 // in0
+//                                 matmul_block(
+//                                     in0_cb_id,
+//                                     in1_cb_id,
+//                                     in0_index,
+//                                     in1_index,
+//                                     dst_index,
+//                                     in1_transpose_tile,
+//                                     out_subblock_w,
+//                                     out_subblock_h,
+//                                     in0_block_w);
+//                                 DPRINT_MATH(DPRINT << "matmul_block();"<< "in1_subblock:" << in1_subblock  << ENDL());
+//                                 in0_index++;               // stride right by 1
+//                                 in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
+//                                                            // (should be called in1_block_w)
+//                             }
+
+// #endif  // SKIP_COMPUTE
+
+//                             if (last_out) {
+
+//                                 tile_regs_commit();
+//                                 // Pack out to output buffer
+//                                 cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
+//                                 DPRINT_PACK(DPRINT << "cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);"<< "in1_subblock:" << in1_subblock << ENDL());
+//                                 tile_regs_wait();
+
+// #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
+//                                 PACK((pack_reconfig_data_format(mm_out_cb_id)));
+// #endif
+
+// #ifdef PACKER_L1_ACC
+
+//                                 PACK((llk_pack_reconfig_l1_acc(0)));
+
+// #endif
+
+//                                 uint32_t start_dst_index = 0;
+//                                 pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+
+//                                 tile_regs_release();
+//                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
+
+//                             } else {
+//                                 //TR1最后执行到这 in1_subblock=2
+//                                 tile_regs_commit();
+//                                 DPRINT_MATH(DPRINT << "tile_regs_commit();" << "in1_subblock:" << in1_subblock << ENDL());
+//                                 // Wait for tiles in output buffer to be written out since interm and output share
+//                                 // memory
+                                
+//                                 if (block == 0) {
+//                                     cb_reserve_back(out_cb_id, out_num_tiles_to_wait);
+//                                     DPRINT_PACK(DPRINT << "cb_reserve_back(out_cb_id, out_num_tiles_to_wait);" << "in1_subblock:" << in1_subblock << ENDL());   
+//                                     out_num_tiles_to_wait += out_subblock_num_tiles;
+//                                 }
+//                                 // Move partial result to interm buffer
+//                                 cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
+//                                 DPRINT_PACK(DPRINT << "cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);" << "in1_subblock:" << in1_subblock << ENDL());   
+//                                 tile_regs_wait();
+//                                 DPRINT_PACK(DPRINT << "tile_regs_wait" << "in1_subblock:" << in1_subblock << ENDL());
+
+// #ifdef PACKER_L1_ACC
+//                                 if (block == 0) {  // no accumulation for first iteration
+//                                     PACK((llk_pack_reconfig_l1_acc(0)));
+//                                 } else if (block == 1) {
+//                                     PACK((llk_pack_reconfig_l1_acc(1)));
+//                                 }
+// #endif
+
+//                                 uint32_t start_dst_index = 0;
+//                                 // TR2最后执行到这里，in1_subblock=1
+//                                 //将dst寄存器打包到CB
+//                                 pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+//                                 DPRINT_PACK(DPRINT << "pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);" << "in1_subblock:" << in1_subblock << ENDL());
+
+//                                 tile_regs_release();
+//                                 DPRINT_PACK(DPRINT << "tile_regs_release" << "in1_subblock:" << in1_subblock << ENDL());
+//                                 cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
+//                                 DPRINT_PACK(DPRINT << "cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);" << "in1_subblock:" << in1_subblock << ENDL()); 
+//                             }
+
+//                             in1_index_subblock_offset += out_subblock_w;
+//                         }   //in1_num_subblocks
+//                         in0_index_subblock_offset += in0_subblock_num_tiles;
+//                     }   //in0_num_subblocks
+
+// #ifdef PACKER_L1_ACC
+
+//                     // Last iteration does spill and reload to output buffer
+//                     if (block < num_blocks_inner_dim - 2) {
+//                         cb_wait_front(mm_partials_cb_id, out_block_num_tiles);
+//                         cb_pop_front(mm_partials_cb_id, out_block_num_tiles);
+//                     }
+//                     if (block == num_blocks_inner_dim - 2) {
+//                         enable_reload = true;
+//                     }  // reload when last iteration
+
+// #else
+//                     if constexpr (spill) {
+//                         enable_reload = true;
+//                     }
+// #endif
+
+//                     cb_pop_front(in0_cb_id, in0_block_num_tiles);
+//                     DPRINT_PACK(DPRINT << "cb_pop_front(in0_cb_id, in0_block_num_tiles);" << ENDL());
+//                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
+//                     DPRINT_PACK(DPRINT << "cb_pop_front(in1_cb_id, in1_block_num_tiles);" << ENDL());
+//                 }   //num_blocks_inner_dim
 
 
-                    // in0_block_num_tiles=per_core_M
-                    cb_wait_front(in0_cb_id, in0_block_num_tiles);
-                    DPRINT_UNPACK(DPRINT << "cb_wait_front(in0_cb_id, in0_block_num_tiles);" << ENDL());
-                    // in1_block_num_tiles=per_core_N
-                    cb_wait_front(in1_cb_id, in1_block_num_tiles);
-                    DPRINT_UNPACK(DPRINT << "cb_wait_front(in1_cb_id, in1_block_num_tiles);" << ENDL());
+//                 if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
 
-                    int in0_index_subblock_offset = 0;
-                    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                        int in1_index_subblock_offset = 0;
-                        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                            tile_regs_acquire();
-                            if (enable_reload) {
-                                reload_from_cb_to_dst(
-                                    in0_cb_id,
-                                    in1_cb_id,
-                                    mm_partials_cb_id,
-                                    in1_transpose_tile,
-                                    out_subblock_num_tiles,
-                                    out_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
-                            }
-
-#ifndef SKIP_COMPUTE
-                            // Compute output sub-block
-                            uint32_t dst_index =
-                                0;  // start at 0, each call to matmul_block internally increments dst_index
-                            uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
-                            uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                            // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
-                            for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
-                                // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-                                // accumulation is done by iterating matmul_block across inner dim
-                                // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride
-                                // in0
-                                matmul_block(
-                                    in0_cb_id,
-                                    in1_cb_id,
-                                    in0_index,
-                                    in1_index,
-                                    dst_index,
-                                    in1_transpose_tile,
-                                    out_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
-                                DPRINT_MATH(DPRINT << "matmul_block(in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);" << ENDL());
-                                in0_index++;               // stride right by 1
-                                in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
-                                                           // (should be called in1_block_w)
-                            }
-
-#endif  // SKIP_COMPUTE
-
-                            if (last_out) {
-
-                                tile_regs_commit();
-                                // Pack out to output buffer
-                                cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
-                                tile_regs_wait();
-
-#if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                                PACK((pack_reconfig_data_format(mm_out_cb_id)));
-#endif
-
-#ifdef PACKER_L1_ACC
-
-                                PACK((llk_pack_reconfig_l1_acc(0)));
-
-#endif
-
-                                uint32_t start_dst_index = 0;
-                                pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
-
-                                tile_regs_release();
-                                cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
-
-                            } else {
-                                tile_regs_commit();
-                                // Wait for tiles in output buffer to be written out since interm and output share
-                                // memory
-                                if (block == 0) {
-                                    cb_reserve_back(out_cb_id, out_num_tiles_to_wait);
-                                    out_num_tiles_to_wait += out_subblock_num_tiles;
-                                }
-                                // Move partial result to interm buffer
-                                cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
-                                DPRINT_PACK(DPRINT << "cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);" << ENDL());
-                                tile_regs_wait();
-
-#ifdef PACKER_L1_ACC
-                                if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
-                                } else if (block == 1) {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
-                                }
-#endif
-
-                                uint32_t start_dst_index = 0;
-                                //将dst寄存器打包到CB
-                                pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
-                                DPRINT_PACK(DPRINT << "pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);" << ENDL());
-
-                                tile_regs_release();
-                                cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
-                                DPRINT_PACK(DPRINT << "cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);" << ENDL());
-                            }
-
-                            in1_index_subblock_offset += out_subblock_w;
-                        }   //in1_num_subblocks
-                        in0_index_subblock_offset += in0_subblock_num_tiles;
-                    }   //in0_num_subblocks
-
-#ifdef PACKER_L1_ACC
-
-                    // Last iteration does spill and reload to output buffer
-                    if (block < num_blocks_inner_dim - 2) {
-                        cb_wait_front(mm_partials_cb_id, out_block_num_tiles);
-                        cb_pop_front(mm_partials_cb_id, out_block_num_tiles);
-                    }
-                    if (block == num_blocks_inner_dim - 2) {
-                        enable_reload = true;
-                    }  // reload when last iteration
-
-#else
-                    if constexpr (spill) {
-                        enable_reload = true;
-                    }
-#endif
-
-                    cb_pop_front(in0_cb_id, in0_block_num_tiles);
-                    cb_pop_front(in1_cb_id, in1_block_num_tiles);
-                }   //num_blocks_inner_dim
-
-
-                if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
-
-                    // reconfigure unpacker df for src A
-                    reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
-                    // reconfigure init for matmul
-                    mm_block_init_short(
-                        in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-                }
-            }
+//                     // reconfigure unpacker df for src A
+//                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+//                     // reconfigure init for matmul
+//                     mm_block_init_short(
+//                         in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+//                 }
+//             }
         }
     }
 }

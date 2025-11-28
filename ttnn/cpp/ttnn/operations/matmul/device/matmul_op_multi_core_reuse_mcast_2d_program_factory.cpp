@@ -556,13 +556,15 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
+        log_info(tt::LogOp, "mm_kernel_in0_sender_interleaved_defines[SKIP_MCAST] = 1;");
     }
     if (in0_height_sharded) {
         mm_kernel_in0_sender_interleaved_defines["IN0_SHARDED"] = "1";
     }
-
+    log_info(tt::LogOp, "velonica::::::::::SKIP_MCAST");
     if (in1_receiver.num_cores() == 0) {
         mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+         log_info(tt::LogOp, "mm_kernel_in1_sender_writer_defines[SKIP_MCAST] = 1;");
     }
     if (in1_is_sharded) {
         if (in1_is_dram) {

@@ -48,7 +48,7 @@ void kernel_main() {
         uint32_t scaler = get_arg_val<uint32_t>(rt_args_idx++);
         generate_reduce_scaler(cb_in_2, scaler);
     }
-    constexpr uint32_t eps_cb_id = 3;
+    constexpr uint32_t eps_cb_id = 11;
     const uint32_t eps = get_arg_val<uint32_t>(rt_args_idx++);
     generate_bcast_col_scalar(eps_cb_id, eps);
     uint32_t gamma_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -122,7 +122,7 @@ void kernel_main() {
     // }
 
     constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_10;
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_single_tile_size_bytes;
     constexpr uint32_t one_tile = 1;
@@ -134,9 +134,9 @@ void kernel_main() {
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, in0_single_tile_size_bytes);
 
 
-    // sparsity accessor
-    constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_6;
-    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr, sparsity_pagesize);
+    // // sparsity accessor
+    // constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_6;
+    // const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr, sparsity_pagesize);
 
 
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -154,6 +154,10 @@ void kernel_main() {
         in0_mcast_dest_noc_end_x,
         in0_mcast_dest_noc_end_y,
         in0_mcast_receiver_semaphore_addr);
+    DPRINT << "in0_mcast_dest_noc_start_x:" << in0_mcast_dest_noc_start_x << ENDL();
+    DPRINT << "in0_mcast_dest_noc_start_y:" << in0_mcast_dest_noc_start_y << ENDL();
+    DPRINT << "in0_mcast_dest_noc_end_x:" << in0_mcast_dest_noc_end_x << ENDL();
+    DPRINT << "in0_mcast_dest_noc_end_y:" << in0_mcast_dest_noc_end_y << ENDL();
 
     const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);
@@ -204,15 +208,16 @@ void kernel_main() {
 //             }
 
 
-            DPRINT << "num_blocks_h_dim=" << num_blocks_h_dim << ENDL();
-            DPRINT << "num_blocks_w_dim=" << num_blocks_w_dim << ENDL();
-            DPRINT << "num_blocks_inner_dim=" << num_blocks_inner_dim << ENDL();
+            // DPRINT << "num_blocks_h_dim=" << num_blocks_h_dim << ENDL();
+            // DPRINT << "num_blocks_w_dim=" << num_blocks_w_dim << ENDL();
+            // DPRINT << "num_blocks_inner_dim=" << num_blocks_inner_dim << ENDL();
 
             uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
-            for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {    //pre_core_M
+            for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {    //pre_core_M（这就是将之前一次性读取多个变为一次性读取一行）
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {    //1
                     uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
                     // 对应 for (uint32_t wt = 0; wt < Wt; wt += blk)
+                    DPRINT << "num_blocks_inner_dim:" << num_blocks_inner_dim << ENDL();
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                         // if constexpr (fuse_op) {
                         //     fused_op_receiver.update_current_block_start_tile_id(
@@ -221,8 +226,10 @@ void kernel_main() {
 
                         // Operand 0
                         // Common for sharded and interleaved paths
-                        DPRINT << "cb_reserve_back(cb_id_in0, in0_block_num_tiles);" << "bh=" << bh << ", bw=" << bw << ", block=" << block << ENDL();  
+                        DPRINT << "cb_reserve_back(cb_id_in0, in0_block_num_tiles);" << ", cb_id_in0:" << static_cast<uint32_t>(cb_id_in0) << ", in0_block_num_tiles:" << in0_block_num_tiles << ENDL(); 
+                        WAYPOINT("CRBW");
                         cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                        WAYPOINT("CRBD");
 
 
                         uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
@@ -237,7 +244,7 @@ void kernel_main() {
                             //对应 for (uint32_t r = 0; r < blk; r++)
                             for (uint32_t w = 0; w < in0_block_w; ++w) {
                                 if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
-                                    DPRINT << "noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);" << "bh=" << bh << ", bw=" << bw << ", block=" << block << ", h=" << h << ", w=" << w << ENDL();  
+                                    // DPRINT << "noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);" << " bh=" << bh << ",  bw=" << bw << ",  block=" << block << ",  h=" << h << ", w=" << w << ENDL();
                                     noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
                                 }
 
@@ -262,59 +269,34 @@ void kernel_main() {
                         // Barrier! make sure the reads are done
                         noc_async_read_barrier();
 
-
-                        // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
-                        // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
-                        // zero for the next block
-                        noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
-                        noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
-
-                        // Now we have the block in the CB address, we can mcast to dests!
-                        uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
-
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc_async_write_multicast(
-                            in0_start_address,
-                            in0_multicast_data_addr,
-                            in0_block_size_bytes,
-                            in0_mcast_num_cores,
-                            true);
-
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id, same
-                        // vc, same cmd_buf Also, this only works because we are setting VCs statically (using
-                        // NOC_CMD_STATIC_VC).
-
-                        // We should also multicast the flag to destinations
-                        // num_dests must not include source, since we are NOT really doing a local copy!
-                        noc_semaphore_set_multicast(
-                            in0_mcast_receiver_semaphore_addr,
-                            in0_mcast_receiver_semaphore_noc_addr,
-                            in0_mcast_num_cores);
-
+                        //mcast的地方，我给删了！！！！！！！！！！！！！！！！！！！！！！！！！！！
+         
                         // Common for sharded and interleaved paths
-                        DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles);" << "bh=" << bh << ", bw=" << bw << ", block=" << block << ENDL();
+                        DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles);" << "in0_block_num_tiles=" << in0_block_num_tiles << ENDL();
+                        WAYPOINT("CPBW");
                         cb_push_back(cb_id_in0, in0_block_num_tiles);
-                        DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles); END END END"  << ENDL();
+                        WAYPOINT("CPBD");
+                        // DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles); END END END"  << ENDL();
                     }
                 }
                 in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
 
-                if (bh == 0) {
-                    for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
-                        cb_reserve_back(cb_id_gamma, in0_block_w);
-                        uint32_t l1_write_addr_gamma = get_write_ptr(cb_id_gamma);
-                        for (uint32_t w = 0; w < in0_block_w; ++w) {
-                            uint64_t gamma_noc_addr = get_noc_addr(block * in0_block_w + w, addrg);
-                            // 第一次读取:读取前 32 字节到第一个 face  
-                            noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 32);  
-                            // 第二次读取:读取后 32 字节到第二个 face (偏移 512)  
-                            noc_async_read(gamma_noc_addr + 32, l1_write_addr_gamma + 512, 32);  
-                            l1_write_addr_gamma += gamma_tile_bytes;
-                        }
-                        noc_async_read_barrier();
-                        cb_push_back(cb_id_gamma, in0_block_w);
-                    }
-                }
+                // if (bh == 0) {
+                //     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                //         cb_reserve_back(cb_id_gamma, in0_block_w);
+                //         uint32_t l1_write_addr_gamma = get_write_ptr(cb_id_gamma);
+                //         for (uint32_t w = 0; w < in0_block_w; ++w) {
+                //             uint64_t gamma_noc_addr = get_noc_addr(block * in0_block_w + w, addrg);
+                //             // 第一次读取:读取前 32 字节到第一个 face  
+                //             noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 32);  
+                //             // 第二次读取:读取后 32 字节到第二个 face (偏移 512)  
+                //             noc_async_read(gamma_noc_addr + 32, l1_write_addr_gamma + 512, 32);  
+                //             l1_write_addr_gamma += gamma_tile_bytes;
+                //         }
+                //         noc_async_read_barrier();
+                //         cb_push_back(cb_id_gamma, in0_block_w);
+                //     }
+                // }
             }
 
             // if constexpr (!bcast_A) {

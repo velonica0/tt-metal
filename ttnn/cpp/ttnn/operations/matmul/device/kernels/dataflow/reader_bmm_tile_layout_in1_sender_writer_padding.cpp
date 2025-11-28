@@ -492,8 +492,9 @@ void kernel_main() {
                     // WRITER
                     uint32_t num_blocks_w_dim_ =
                         bw >= last_num_blocks_w_dim - 1 ? last_num_blocks_w_dim : num_blocks_w_dim;
-                    uint32_t out_num_nonzero_subblocks_h_ = out_num_nonzero_subblocks_h;
-                    uint32_t out_num_nonzero_subblocks_w_ = out_num_nonzero_subblocks_w;
+                    uint32_t out_num_nonzero_subblocks_h_ = out_num_nonzero_subblocks_h;    //1
+                    uint32_t out_num_nonzero_subblocks_w_ = out_num_nonzero_subblocks_w;    //8
+                    //当处理到最后一个宽度维度块时（bw == num_blocks_w_dim_ - 1），将非零子块的宽度数量更新为最后一块的实际数量。
                     if (bw == num_blocks_w_dim_ - 1) {
                         out_num_nonzero_subblocks_w_ = out_last_num_nonzero_subblocks_w;
                     }
@@ -501,6 +502,7 @@ void kernel_main() {
                     for (uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h_; ++sbh) {
                         uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
                         for (uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w_; ++sbw) {
+                            DPRINT<<"sbh:" << sbh << " sbw:" << sbw << ENDL();
                             uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
                             uint32_t out_subblock_h_ = out_subblock_h;
@@ -536,11 +538,16 @@ void kernel_main() {
                             noc_async_write_barrier();
                             cb_pop_front(cb_id_out0, out_subblock_tile_count);
                             out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
+                            DPRINT<<"out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;" << ENDL();
                         }
+                        DPRINT<<"rapport:::::::::::::::::sbh:" << sbh << ENDL();
                         // Pop fully padded subblocks along the row
                         if (bw == num_blocks_w_dim_ - 1) {
+                            DPRINT<<"cb_wait_front(cb_id_out0, padded_block_tiles_w_skip); WAIT WAIT WAIT"<<ENDL();
                             cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
+                            DPRINT<<"cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);"<<ENDL();
                             cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
+                            DPRINT<<"cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);"<<ENDL();
                         }
                         out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
                     }

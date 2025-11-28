@@ -56,6 +56,11 @@ void kernel_main() {
     constexpr uint32_t MtKt = get_compile_time_arg_val(18);  // if 0
     constexpr uint32_t batch = get_compile_time_arg_val(19);
 
+    DPRINT << "in0_mcast_dest_noc_start_x:" << in0_mcast_dest_noc_start_x << ENDL();
+    DPRINT << "in0_mcast_dest_noc_start_y:" << in0_mcast_dest_noc_start_y << ENDL();
+    DPRINT << "in0_mcast_dest_noc_end_x:" << in0_mcast_dest_noc_end_x << ENDL();
+    DPRINT << "in0_mcast_dest_noc_end_y:" << in0_mcast_dest_noc_end_y << ENDL();
+
     // sparsity args
 
     constexpr uint32_t batchB = get_compile_time_arg_val(20);
@@ -135,6 +140,8 @@ void kernel_main() {
         in0_mcast_dest_noc_end_x,
         in0_mcast_dest_noc_end_y,
         in0_mcast_receiver_semaphore_addr);
+
+
 
     const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);

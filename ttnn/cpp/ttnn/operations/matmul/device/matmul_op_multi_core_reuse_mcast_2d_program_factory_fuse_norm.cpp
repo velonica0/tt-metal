@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <tt-logger/tt-logger.hpp>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -108,8 +109,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
     uint32_t out_num_blocks_x = in1_num_blocks_x;
     uint32_t out_num_blocks_y = in0_num_blocks_y;
 
-    uint32_t in0_block_tiles = out_block_h * in0_block_w;
-    uint32_t in0_CB_tiles = in0_block_tiles;
+    // uint32_t in0_block_tiles = out_block_h * in0_block_w;
+    // uint32_t in0_CB_tiles = in0_block_tiles;
+    uint32_t in0_CB_tiles = K;  // norm读取要装入整行
     if (B * num_blocks > 1) {
         in0_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
@@ -831,6 +833,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
+    log_info(tt::LogOp, "in0_CB_size:{}", in0_CB_tiles);
     if (in0_height_sharded) {
         src0_cb_config.set_globally_allocated_address(*in0_buffer);
     }
@@ -848,6 +851,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
+    log_info(tt::LogOp, "in1_CB_size:{}", in1_CB_tiles);
     if (in1_is_sharded and not in1_is_dram) {
         src1_cb_config.set_globally_allocated_address(*in1_buffer);
     }
@@ -891,6 +895,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(0, {{output_cb_index, output_data_format}});
+
+    log_info(tt::LogOp, "out_CB_size:{}", out_CB_tiles);
+    log_info(tt::LogOp, "interm0_CB_size:{}", interm0_CB_tiles);
 
     if (do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) ||
         (untilize_out && (in1_num_subblocks > 1))) {
@@ -973,44 +980,69 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
                 .set_tile_dims(in0_intermediate_cb_index, in0_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
     }
+
+    // norm多出来的CB,一共2+4个
     {
         uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
-        uint32_t in3_cb_index = tt::CBIndex::c_3;
-        tt::tt_metal::CircularBufferConfig in3_cb_config =
-        tt::tt_metal::CircularBufferConfig(bfloat16_tile_size, {{in3_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in3_cb_index, bfloat16_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, in3_cb_config);
-    }
-    {
-        uint32_t im5_t = 2 * in0_block_w;  // for buffering to/from *gamma/+beta
-        uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
-        uint32_t im1_t = 2;
-        uint32_t in2_t = 2;  // scaler for reduce coming from reader    用于归约
-        uint32_t in3_t = 2;  // epsilon coming from reader              用于eps
-        uint32_t im2_t = 2;  //
-        
         tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
         uint32_t single_tile_size = tt::tile_size(cb_data_format);
-        tt::tt_metal::CircularBufferConfig cb_intermed2_config =
-        tt::tt_metal::CircularBufferConfig(im2_t * single_tile_size, {{tt::CBIndex::c_19, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_19, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed2_config);
+        uint32_t in12_t = 2;  // scaler for reduce coming from reader    用于归约
+        uint32_t in11_t = 2;  // epsilon coming from reader              用于eps
+        uint32_t im5_t = 2 * in0_block_w;  // for buffering to/from *gamma/+beta
+        uint32_t im2_t = 2;  //
+        uint32_t im3_t = K;  // buffer for xmm^2
+        uint32_t im4_t = 8;  // 8 just in case, 4 would prob suffice
+        uint32_t in10_t = K;             // buffer for gamma。由于block_size是Wt的约数，因此WtB==Wt
 
-        tt::tt_metal::CircularBufferConfig c_intermed3_config =
-            tt::tt_metal::CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_20, cb_data_format}})
-                .set_page_size(tt::CBIndex::c_20, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, c_intermed3_config);
+        //in2 - scalar
+        tt_metal::CircularBufferConfig cb_in12_config =
+        tt_metal::CircularBufferConfig(in12_t * bfloat16_tile_size, {{tt::CBIndex::c_12, tt::DataFormat::Float16_b}})
+            .set_page_size(tt::CBIndex::c_12, bfloat16_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in12_config);
+        //in7 - eps
+        tt_metal::CircularBufferConfig cb_in11_config =
+        tt_metal::CircularBufferConfig(in11_t * bfloat16_tile_size, {{tt::CBIndex::c_11, tt::DataFormat::Float16_b}})
+            .set_page_size(tt::CBIndex::c_11, bfloat16_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in11_config);
+        //in10 - gamma
+        if (gamma.has_value()) {
+            
+            tt::DataFormat gamma_cb_data_format =
+                gamma.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
+                                  : tt::DataFormat::Float16_b;
+            uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
+            uint32_t in10_cb_index = tt::CBIndex::c_10;
+            tt::tt_metal::CircularBufferConfig in10_cb_config =
+                tt::tt_metal::CircularBufferConfig(in10_t * gamma_single_tile_size, {{in10_cb_index, gamma_cb_data_format}})
+                    .set_page_size(in10_cb_index, gamma_single_tile_size);
+            tt::tt_metal::CreateCircularBuffer(program, all_cores, in10_cb_config);
 
-        tt::tt_metal::CircularBufferConfig c_intermed4_config =
-            tt::tt_metal::CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_21, cb_data_format}})
-                .set_page_size(tt::CBIndex::c_21, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, c_intermed4_config);
-
-        tt::tt_metal::CircularBufferConfig c_intermed5_config =
-            tt::tt_metal::CircularBufferConfig(im5_t * single_tile_size, {{tt::CBIndex::c_22, cb_data_format}})
+            tt_metal::CircularBufferConfig c_intermed5_config =
+            tt_metal::CircularBufferConfig(im5_t * single_tile_size, {{tt::CBIndex::c_22, cb_data_format}})
                 .set_page_size(tt::CBIndex::c_22, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, c_intermed5_config);
+            tt_metal::CreateCircularBuffer(program, all_cores, c_intermed5_config);
+            log_info(tt::LogOp, "im5_CB_size:{}", im5_t );
+        }
+        //
+        tt_metal::CircularBufferConfig cb_intermed2_config =
+            tt_metal::CircularBufferConfig(im2_t * single_tile_size, {{tt::CBIndex::c_19, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_19, single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed2_config);
+        log_info(tt::LogOp, "im2_CB_size:{}", im2_t);
+        //
+        tt_metal::CircularBufferConfig c_intermed3_config =
+            tt_metal::CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_20, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_20, single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, c_intermed3_config);
+        log_info(tt::LogOp, "im3_CB_size:{}", im3_t );
+        //
+        tt_metal::CircularBufferConfig c_intermed4_config =
+            tt_metal::CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_21, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_21, single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, c_intermed4_config);
+        log_info(tt::LogOp, "im4_CB_size:{}", im4_t );
     }
+    
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
@@ -1637,6 +1669,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     uint32_t Mt = ashape[-2] / in0_tile_shape[0];
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
+
+    log_info(tt::LogOp, "ashape[-2]: {}, ashape[-1]: {}, bshape[-2]: {}, bshape[-1]: {}", ashape[-2], ashape[-1], bshape[-2], bshape[-1]);
+    log_info(tt::LogOp, "in0_tile_shape[0]: {}, in0_tile_shape[1]: {}, in1_tile_shape[1]: {}", in0_tile_shape[0], in0_tile_shape[1], in1_tile_shape[1]);
 
     if (fuse_batch) {
         Mt = B * Mt;

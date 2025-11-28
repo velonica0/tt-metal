@@ -11,7 +11,7 @@
 // Scalar is assumed to be a 16-bit value double packed into a u32
 FORCE_INLINE void generate_bcast_col_scalar(const uint32_t cb_id, const uint32_t scalar) {
     const uint16_t scalar_val = scalar >> 16;
-    DPRINT << "cb_reserve_back" << ENDL();
+    // DPRINT << "cb_reserve_back" << ENDL();
     cb_reserve_back(cb_id, 1);
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
     for (int k = 0; k < 4; k += 2) {
@@ -20,7 +20,7 @@ FORCE_INLINE void generate_bcast_col_scalar(const uint32_t cb_id, const uint32_t
             ptr[idx + j] = scalar_val;
         }
     }
-    DPRINT << "cb_push_back" << ENDL();
+    // DPRINT << "cb_push_back" << ENDL();
     cb_push_back(cb_id, 1);
 }
 
