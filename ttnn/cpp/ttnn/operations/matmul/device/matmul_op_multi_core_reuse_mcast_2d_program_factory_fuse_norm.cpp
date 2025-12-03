@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
 #include <utility>
@@ -269,6 +270,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
 
     // Top row except corner
     std::optional<CoreRange> in0_receiver_in1_sender;
+    log_info(tt::LogOp, "num_cores_with_work_c:{}", num_cores_with_work_c);
+    log_info(tt::LogOp, "num_cores_with_work_r:{}", num_cores_with_work_r);
     if (num_cores_with_work_c > 1) {
         in0_receiver_in1_sender = {
             {(std::size_t)start_core_x + 1, (std::size_t)start_core_y},
@@ -402,8 +405,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
             (std::uint32_t)in0_shard_height_in_tiles,  // shard_height_in_tiles (not used for interleaved)
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
-            (std::uint32_t)out_num_blocks_x,
-            (std::uint32_t)out_num_blocks_y,
+            (std::uint32_t)out_num_blocks_x,    // num_blocks_w_dim
+            (std::uint32_t)out_num_blocks_y,    // num_blocks_h_dim
             // in0 mcast args
             (std::uint32_t)in0_mcast_sender_semaphore_id,
             (std::uint32_t)in0_mcast_receiver_semaphore_id,
