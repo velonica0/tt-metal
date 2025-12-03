@@ -305,7 +305,16 @@ void MAIN {
             cb_pop_front(cb_ex2pe, 1);
             DPRINT_UNPACK(DPRINT << "cb_pop_front(cb_ex2pe, 1);" << ", cb_ex2pe:"<<static_cast<uint32_t>(cb_ex2pe) << ENDL());
             cb_pop_front(cb_xmm, in0_block_w * num_blocks_inner_dim);   //因为size是Wt，所以对于norm的输入来说，肯定是全程都在L1（norm也需要两遍的使用）
-            DPRINT_UNPACK(DPRINT << "cb_pop_front(cb_xmm, in0_block_w * num_blocks_inner_dim);" << ", cb_xmm:"<<static_cast<uint32_t>(cb_xmm)<<", in0_block_w * num_blocks_inner_dim:"<<in0_block_w * num_blocks_inner_dim << ENDL());
+            DPRINT_UNPACK(
+                DPRINT << "cb_pop_front(cb_xmm, in0_block_w * num_blocks_inner_dim);"
+                       << ", cb_xmm:" << static_cast<uint32_t>(cb_xmm)
+                       << ", in0_block_w * num_blocks_inner_dim:" << in0_block_w * num_blocks_inner_dim << ENDL());
+
+
+            for (uint32_t i = 0; i < in0_block_w * num_blocks_inner_dim; i += in0_block_w) {
+                cb_wait_front(cb_norm_output, in0_block_w);
+                cb_pop_front(cb_norm_output, in0_block_w);
+            }
 
 //norm与matmul的分隔符-----------------------------------------------------------------------------------------------------------------------------
 
@@ -480,6 +489,8 @@ void MAIN {
 //                 }
 //             }
         }
+        DPRINT << "for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) END END END" << ENDL();
     }
+    DPRINT << "for (uint32_t b = 0; b < batch; b++) END END END" << ENDL();
 }
 }  // namespace NAMESPACE

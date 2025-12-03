@@ -277,13 +277,9 @@ void kernel_main() {
                         DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles);" << "in0_block_num_tiles=" << in0_block_num_tiles << ENDL();
                         cb_push_back(cb_id_in0, in0_block_num_tiles);
                         // DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles); END END END"  << ENDL();
-
-
-                    }
+                    }                                    
                 }
                 in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
-                // cb_wait_front(cb_norm_output, in0_block_w);
-                // cb_pop_front(cb_norm_output, in0_block_w);
 
                 
                 // if (bh == 0) {
@@ -314,4 +310,5 @@ void kernel_main() {
         // }
     }
     noc_async_write_barrier();
+    DPRINT << "for (uint32_t b = 0; b < batch; ++b) END END END"  << ENDL();
 }
