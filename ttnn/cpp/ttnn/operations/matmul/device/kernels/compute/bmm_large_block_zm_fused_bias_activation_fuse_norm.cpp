@@ -120,9 +120,10 @@ void MAIN {
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // 存储 1/√(E[x²] + ε),即 RMS 归一化因子
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
+    constexpr auto cb_norm_output = tt::CBIndex::c_16;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
-    constexpr int cb_im_or_out = (do_gamma ) ? cb_fusion : cb_out;
+    constexpr int cb_im_or_out = (do_gamma ) ? cb_fusion : cb_norm_output;
 
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 
@@ -179,7 +180,7 @@ void MAIN {
                 WAYPOINT("CWFW");
                 cb_wait_front(cb_xmm, wt + in0_block_w);  // cumulative wait
                 WAYPOINT("CWFD");
-                DPRINT_PACK(DPRINT << "cb_reserve_back(cb_xmm2, in0_block_w);"<<", cb_xmm2:"<<static_cast<uint32_t>(cb_xmm2)<<", in0_block_w:"<<in0_block_w << ENDL());
+                // DPRINT_PACK(DPRINT << "cb_reserve_back(cb_xmm2, in0_block_w);"<<", cb_xmm2:"<<static_cast<uint32_t>(cb_xmm2)<<", in0_block_w:"<<in0_block_w << ENDL());
                 cb_reserve_back(cb_xmm2, in0_block_w);  // can probably use less space for this if we block
                 ACQ();
                 for (uint32_t wtr = 0; wtr < in0_block_w; wtr++) {
@@ -245,18 +246,18 @@ void MAIN {
             // 第三步：分块归一化循环，这个循环将 cb_xmm 与归一化因子 cb_ex2pe (即 1/√(E[x²]+ε)) 相乘，结果存入
             // cb_fusion
             cb_wait_front(cb_ex2pe, 1);
-            // DPRINT_UNPACK(DPRINT << "cb_wait_front(cb_ex2pe, 1);" << ENDL());
+            DPRINT_UNPACK(DPRINT << "cb_wait_front(cb_ex2pe, 1);" << ENDL());
             for (uint32_t wt = 0; wt < in0_block_w * num_blocks_inner_dim; wt += in0_block_w) {
                 // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
                 // if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
                 reconfig_data_format(cb_xmm, cb_ex2pe);
                 if constexpr (do_gamma == 0 ) {
-                    pack_reconfig_data_format(cb_out);
+                    pack_reconfig_data_format(cb_norm_output);
                 } else {
                     pack_reconfig_data_format(cb_fusion);
                 }
                 cb_reserve_back(cb_im_or_out, in0_block_w);
-                // DPRINT_PACK(DPRINT << "cb_reserve_back(cb_im_or_out, in0_block_w);" << ENDL());
+                DPRINT_PACK(DPRINT << "cb_reserve_back(cb_im_or_out, in0_block_w);" << " wt:" << wt <<" cb_im_or_out:"<<static_cast<uint32_t>(cb_im_or_out)<< ENDL());
 
                 reconfig_data_format_srca(cb_fusion, cb_xmm);
 
@@ -266,11 +267,12 @@ void MAIN {
                     // cb_xmm[wt+wtr] since we pop in0_block_w * num_blocks_inner_dim from cb_xmm after the entire loop
                     // 第二次使用：应用归一化算子
                     mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
-                    // DPRINT_MATH(DPRINT << "mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);" << ENDL());
+                    DPRINT_MATH(DPRINT << "mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);" << " wt:" << wt << " wtr:" << wtr << ENDL());
                     pack_tile(wtr, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
                 }
+                
                 cb_push_back(cb_im_or_out, in0_block_w);  // if no gamma/beta are provided, this will be passed on to the writer
-                // DPRINT_PACK(DPRINT << "cb_push_back(cb_im_or_out, in0_block_w);" << ENDL());
+                DPRINT_PACK(DPRINT << "cb_push_back(cb_im_or_out, in0_block_w);" << " wt:" << wt <<" cb_im_or_out:"<<static_cast<uint32_t>(cb_im_or_out)<< ENDL());
                 REL();
 
                 if constexpr (!(do_gamma == 0 )) {
@@ -280,11 +282,11 @@ void MAIN {
                 }
                 if constexpr (do_gamma) {
                     
-                    pack_reconfig_data_format(cb_out);
+                    pack_reconfig_data_format(cb_norm_output);
                     
                     reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                     ACQ();
-                    uint32_t cb_outg = cb_out ;
+                    uint32_t cb_outg = cb_norm_output ;
                     mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                     cb_reserve_back(cb_outg, in0_block_w);
                     cb_wait_front(cb_gamma, wt + in0_block_w);  // we don't pop, TODO: only wait on first ht

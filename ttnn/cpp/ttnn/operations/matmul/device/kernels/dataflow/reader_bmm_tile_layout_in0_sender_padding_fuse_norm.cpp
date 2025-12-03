@@ -133,6 +133,7 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, in0_single_tile_size_bytes);
 
+    constexpr auto cb_norm_output = tt::CBIndex::c_16;
 
     // // sparsity accessor
     // constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_6;
@@ -217,7 +218,7 @@ void kernel_main() {
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {    //1
                     uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
                     // 对应 for (uint32_t wt = 0; wt < Wt; wt += blk)
-                    DPRINT << "num_blocks_inner_dim:" << num_blocks_inner_dim << ENDL();
+                    DPRINT << "num_blocks_inner_dim:" << num_blocks_inner_dim <<" bh:" << bh << ENDL();
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                         // if constexpr (fuse_op) {
                         //     fused_op_receiver.update_current_block_start_tile_id(
@@ -227,9 +228,7 @@ void kernel_main() {
                         // Operand 0
                         // Common for sharded and interleaved paths
                         DPRINT << "cb_reserve_back(cb_id_in0, in0_block_num_tiles);" << ", cb_id_in0:" << static_cast<uint32_t>(cb_id_in0) << ", in0_block_num_tiles:" << in0_block_num_tiles << ENDL(); 
-                        WAYPOINT("CRBW");
                         cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-                        WAYPOINT("CRBD");
 
 
                         uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
@@ -260,9 +259,12 @@ void kernel_main() {
                                 }
 
                                 l1_write_addr_in0 += in0_single_tile_size_bytes;    //字节数
-                                in0_tensor_tile_id += in0_tensor_stride_w;          //索引id
+                                in0_tensor_tile_id += in0_tensor_stride_w;          // 索引id
+
+
                             }
                             in0_tensor_row_start_tile_id += in0_tensor_stride_h;
+
                         }
                         in0_tensor_current_inner_dim_block_start_tile_id += in0_tensor_next_inner_dim_block_stride;
 
@@ -273,14 +275,17 @@ void kernel_main() {
          
                         // Common for sharded and interleaved paths
                         DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles);" << "in0_block_num_tiles=" << in0_block_num_tiles << ENDL();
-                        WAYPOINT("CPBW");
                         cb_push_back(cb_id_in0, in0_block_num_tiles);
-                        WAYPOINT("CPBD");
                         // DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles); END END END"  << ENDL();
+
+
                     }
                 }
                 in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
+                // cb_wait_front(cb_norm_output, in0_block_w);
+                // cb_pop_front(cb_norm_output, in0_block_w);
 
+                
                 // if (bh == 0) {
                 //     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                 //         cb_reserve_back(cb_id_gamma, in0_block_w);
