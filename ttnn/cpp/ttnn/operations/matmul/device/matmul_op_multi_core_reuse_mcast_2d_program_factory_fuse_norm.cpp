@@ -112,6 +112,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
 
     // uint32_t in0_block_tiles = out_block_h * in0_block_w;
     // uint32_t in0_CB_tiles = in0_block_tiles;
+    uint32_t matmul_in0_block_tiles = out_block_h * in0_block_w;
+    uint32_t matmul_in0_CB_tiles = matmul_in0_block_tiles;
+    uint32_t matmul_in0_CB_size = matmul_in0_CB_tiles * in0_single_tile_size;
+
     uint32_t in0_CB_tiles = K;  // norm读取要装入整行
     if (B * num_blocks > 1) {
         in0_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
@@ -1052,6 +1056,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
                 .set_page_size(norm_output_cb_index, single_tile_size);
         tt_metal::CreateCircularBuffer(program, all_cores, norm_output_cb_config);
         log_info(tt::LogOp, "norm_out_CB_size:{}", K);
+
+        uint32_t matmul_in0_cb_index = tt::CBIndex::c_17;
+        tt::tt_metal::CircularBufferConfig matmul_in0_cb_config =
+            tt::tt_metal::CircularBufferConfig(matmul_in0_CB_size, {{matmul_in0_cb_index, cb_data_format}})
+                .set_page_size(matmul_in0_cb_index, single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, matmul_in0_cb_config);
+        log_info(tt::LogOp, "matmul_in0_CB_size:{}", matmul_in0_CB_size);
     }
     
     // Parameters for last row, col, or block

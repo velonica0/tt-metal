@@ -3,9 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstring>
 
+
+#include "compute_kernel_api.h"  
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack_untilize.h"
+#include "compute_kernel_api/common.h"  
 #include "compute_kernel_api/tile_move_copy.h"
 #include "mod_div_lib.h"
 
@@ -37,6 +41,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "dprint_tensix.h"
+
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
@@ -57,6 +62,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
     // Reconfigure input
+    // 将 mm_partials_cb_id 配置为 srcA 的数据源，copy_tile_to_dst_init_short_with_dt底层调用reconfig_data_format_srca 
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
     cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
 
@@ -121,6 +127,7 @@ void MAIN {
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
     constexpr auto cb_norm_output = tt::CBIndex::c_16;
+    constexpr auto matmul_in0_cb_id = tt::CBIndex::c_17;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
     constexpr int cb_im_or_out = (do_gamma ) ? cb_fusion : cb_norm_output;
@@ -317,6 +324,11 @@ void MAIN {
 
 //norm与matmul的分隔符-----------------------------------------------------------------------------------------------------------------------------
 
+            // 现在的输入是cb_norm_output，一整行已经在L1中。等待的是整个K(in0_block_w * num_blocks_inner_dim)
+            cb_wait_front(cb_norm_output, in0_block_w * num_blocks_inner_dim);
+            // 获取cb_norm_output的地址
+            uint32_t cb_norm_output_addr = get_read_ptr(cb_norm_output);
+
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {    // 1
                 bool enable_reload = false;
                 uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -330,7 +342,17 @@ void MAIN {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {   // num_blocks_inner_dim = num_blocks = K / in0_block_w = K(Kt)
                     bool last_out = block == (num_blocks_inner_dim - 1);
 
-                    cb_wait_front(in0_cb_id, in0_block_num_tiles);
+                    // 根据cb_norm_output_addr去获取到需要读取的数据
+                    uint32_t cb_matmul_in0_addr = cb_norm_output_addr + block * in0_block_w;
+                    // 新创建一个CB:matmul_in0_cb_id，用于实际计算matmul_tile
+                    cb_reserve_back(matmul_in0_cb_id, in0_block_num_tiles);
+                    memcpy(reinterpret_cast<void*>(cb_matmul_in0_addr),   
+                        reinterpret_cast<const void*>(cb_norm_output_addr),   
+                        in0_block_num_tiles * get_tile_size(cb_norm_output));  
+                    cb_push_back(matmul_in0_cb_id, in0_block_num_tiles);
+                    
+                    // cb_wait_front(in0_cb_id, in0_block_num_tiles);
+                    cb_wait_front(matmul_in0_cb_id, in0_block_num_tiles);
                     // DPRINT_UNPACK(DPRINT << "cb_wait_front(in0_cb_id, in0_block_num_tiles);" << ENDL());
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
                     // DPRINT_UNPACK(DPRINT << "cb_wait_front(in1_cb_id, in1_block_num_tiles);" << ENDL());
@@ -344,7 +366,8 @@ void MAIN {
                             DPRINT_MATH(DPRINT << "tile_regs_acquire();" <<"in1_subblock: "<<in1_subblock<< ENDL());
                             if (enable_reload) {
                                 reload_from_cb_to_dst(
-                                    in0_cb_id,
+                                    // in0_cb_id,
+                                    matmul_in0_cb_id,
                                     in1_cb_id,
                                     mm_partials_cb_id,
                                     in1_transpose_tile,
@@ -367,7 +390,8 @@ void MAIN {
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride
                                 // in0
                                 matmul_block(
-                                    in0_cb_id,
+                                    // in0_cb_id,
+                                    matmul_in0_cb_id,
                                     in1_cb_id,
                                     in0_index,
                                     in1_index,
@@ -468,20 +492,25 @@ void MAIN {
                     }
 #endif
 
-                    cb_pop_front(in0_cb_id, in0_block_num_tiles);
-                    DPRINT_PACK(DPRINT << "cb_pop_front(in0_cb_id, in0_block_num_tiles);" << ENDL());
+                    // cb_pop_front(in0_cb_id, in0_block_num_tiles);
+                    cb_pop_front(matmul_in0_cb_id, in0_block_num_tiles);
+                    // DPRINT_PACK(DPRINT << "cb_pop_front(in0_cb_id, in0_block_num_tiles);" << ENDL());
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
-                    DPRINT_PACK(DPRINT << "cb_pop_front(in1_cb_id, in1_block_num_tiles);" << ENDL());
+                    // DPRINT_PACK(DPRINT << "cb_pop_front(in1_cb_id, in1_block_num_tiles);" << ENDL());
                 }   //num_blocks_inner_dim
 
 
+                // 与PACK((pack_reconfig_data_format(mm_partials_cb_id)));对应，将srca从mm_partials_cb_id切换为in1_cb_id
                 if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
 
                     // reconfigure unpacker df for src A
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
                     // reconfigure init for matmul
+                    // mm_block_init_short(
+                    //     in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                     mm_block_init_short(
-                        in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+                        matmul_in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+                    
                 }
             }
         }
