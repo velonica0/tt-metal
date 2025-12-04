@@ -238,23 +238,24 @@ void kernel_main() {
 #endif  // IN1_DRAM_SHARDED
             uint32_t in1_tensor_current_h_dim_block_tile_id = in1_batch_tile_id;
             uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
-            for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+            for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {//per_core_M / out_block_h
                 uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_current_h_dim_block_tile_id;
                 uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
 #ifdef FUSE_BIAS
                 uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id;
 #endif  // FUSE_BIAS
-                for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+                for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {//per_core_N / out_block_w
+                    DPRINT << "in1 read sender bw=" << bw << ", num_blocks_w_dim=" << num_blocks_w_dim << ENDL();
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
 
-                    for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                    for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {//K / in0_block_w
                         if constexpr (fuse_op_all_gather) {
                             fused_op_receiver.update_current_block_start_tile_id(
                                 block, in1_tensor_current_inner_dim_block_start_tile_id, in1_batch_tile_id);
                         }
 #ifdef IN1_DRAM_SHARDED
                         // Operand 1
-                        cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                        cb_reserve_back(cb_id_in1, in1_block_num_tiles);//in1_block_w * in0_block_w
 
                         uint64_t in1_start_address =
                             get_write_ptr(cb_id_in1);  // copy start address of block, to be used for mcasting
@@ -263,6 +264,7 @@ void kernel_main() {
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
+                            DPRINT << "in1 read sender num_dram_shards_to_read: "<< num_dram_shards_to_read<< ",  i=" << i << ENDL();
                             uint32_t in1_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
                                 in1_tensor_addr,
                                 in1_single_tile_size_bytes,
@@ -290,6 +292,7 @@ void kernel_main() {
                                 }
                                 l1_read_addr_in1 += in1_block_w_dram_bytes;
                                 l1_write_addr_in1 += in1_block_w_bytes;
+                                DPRINT << "in1 read sender noc_async_read_tile_dram_sharded_with_state in1_block_h: "<< in1_block_h<< ",  in1_block_w_dram=" << in1_block_w_dram << ENDL();
                             }
                             l1_write_addr_in1_offset +=
                                 in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index];
@@ -300,7 +303,7 @@ void kernel_main() {
 #else
 #ifndef IN1_SHARDED
                         // Operand 1
-                        cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                        cb_reserve_back(cb_id_in1, in1_block_num_tiles);//in1_block_w * in0_block_w=1*8=8
 #ifdef INTERMEDIATE_CB_READ
                         constexpr uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
                         cb_reserve_back(in1_intermediate_cb_index, one_tile);
@@ -312,12 +315,13 @@ void kernel_main() {
 
                         // Copy in1 block into CB, as the default kernel
                         uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
-                        for (uint32_t h = 0; h < in1_block_h; ++h) {
+                        for (uint32_t h = 0; h < in1_block_h; ++h) {//in0_block_w
                             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                             for (uint32_t w = 0; w < in1_block_w; ++w) {
                                 if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
 #ifndef INTERMEDIATE_CB_READ
                                     noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
+                                    DPRINT << "in1 read sender noc_async_read_tile in1_block_h: "<< in1_block_h<< ",  in1_block_w=" << in1_block_w << ",  h=" << h<< ENDL();
 #else
                                     noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_helper);
                                     noc_async_read_barrier();
@@ -330,12 +334,13 @@ void kernel_main() {
                                 l1_write_addr_in1 += in1_single_tile_size_bytes;
                                 in1_tensor_tile_id += in1_tensor_stride_w;
                             }
-                            in1_tensor_row_start_tile_id += in1_tensor_stride_h;
+                            in1_tensor_row_start_tile_id += in1_tensor_stride_h;//此处是不是应该优化
                         }
                         in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
 
                         // Barrier! make sure the reads are done
                         noc_async_read_barrier();
+                        DPRINT << "in1 read sender noc_async_read_barrier,  bw=" << bw << ",  block=" << block<< ENDL();
 #endif  // IN1_SHARDED
 #endif  // IN1_DRAM_SHARDED
 
@@ -344,7 +349,11 @@ void kernel_main() {
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
                         noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
+                        DPRINT << "in1 read sender noc_semaphore_wait,  in1_mcast_num_dests=" << in1_mcast_num_dests << ENDL();
                         noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
+                        DPRINT << "in1 read sender noc_semaphore_set,  in1_mcast_num_dests=" << in1_mcast_num_dests << ENDL();
+
+
 
                         // Now we have the block in the CB address, we can mcast to dests!
                         uint64_t in1_multicast_data_addr = in1_multicast_data_noc | in1_start_address;
@@ -356,7 +365,7 @@ void kernel_main() {
                             in1_block_size_bytes,
                             in1_mcast_num_cores,
                             true);
-
+                        DPRINT << "in1 read sender noc_async_write_multicast" << ENDL();
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                         // same vc even though cmd bufs are different Also, this only works because we are setting VCs
                         // statically (using NOC_CMD_STATIC_VC).
@@ -373,8 +382,9 @@ void kernel_main() {
                             in1_mcast_receiver_semaphore_addr,
                             in1_mcast_receiver_semaphore_noc_addr,
                             in1_mcast_num_cores);
+                        DPRINT << "in1 read sender noc_semaphore_set_multicast" << ENDL();
 #endif  // SKIP_MCAST
-
+                        DPRINT << "in1 read sender skip mcast" << ENDL();
 #ifndef IN1_SHARDED
                         cb_push_back(cb_id_in1, in1_block_num_tiles);
 #ifdef INTERMEDIATE_CB_READ
@@ -502,7 +512,7 @@ void kernel_main() {
                     for (uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h_; ++sbh) {
                         uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
                         for (uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w_; ++sbw) {
-                            DPRINT<<"sbh:" << sbh << " sbw:" << sbw << ENDL();
+                            DPRINT<<"write sbh:" << sbh << " sbw:" << sbw <<", out_num_nonzero_subblocks_h_:"<< out_num_nonzero_subblocks_h_ <<", out_num_nonzero_subblocks_w_:"<< out_num_nonzero_subblocks_w_ << ENDL();
                             uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
                             uint32_t out_subblock_h_ = out_subblock_h;
@@ -515,8 +525,9 @@ void kernel_main() {
                                 out_subblock_w_ = out_last_subblock_w;
                                 subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
                             }
-
+                            DPRINT<<"write start cb_wait_front, out_subblock_tile_count:" << out_subblock_tile_count << ", cb_id_out0:"<<static_cast<uint32_t>(cb_id_out0)<< ENDL();
                             cb_wait_front(cb_id_out0, out_subblock_tile_count);
+                            DPRINT<<"write cb_wait_front, out_subblock_tile_count:" << out_subblock_tile_count << ENDL();
                             uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
                             for (uint32_t h = 0; h < out_subblock_h_; ++h) {
@@ -538,16 +549,16 @@ void kernel_main() {
                             noc_async_write_barrier();
                             cb_pop_front(cb_id_out0, out_subblock_tile_count);
                             out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
-                            DPRINT<<"out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;" << ENDL();
+                            DPRINT<<"write out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;" << ENDL();
                         }
-                        DPRINT<<"rapport:::::::::::::::::sbh:" << sbh << ENDL();
+                        DPRINT<<"write rapport:::::::::::::::::sbh:" << sbh << ENDL();
                         // Pop fully padded subblocks along the row
                         if (bw == num_blocks_w_dim_ - 1) {
-                            DPRINT<<"cb_wait_front(cb_id_out0, padded_block_tiles_w_skip); WAIT WAIT WAIT"<<ENDL();
+                            DPRINT<<"write cb_wait_front(cb_id_out0, padded_block_tiles_w_skip); WAIT WAIT WAIT"<<ENDL();
                             cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
-                            DPRINT<<"cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);"<<ENDL();
+                            DPRINT<<"write cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);"<<ENDL();
                             cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
-                            DPRINT<<"cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);"<<ENDL();
+                            DPRINT<<"write cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);"<<ENDL();
                         }
                         out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
                     }
