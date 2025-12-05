@@ -115,7 +115,7 @@ void MAIN {
     /*rmsnorm的CB*/
     constexpr auto cb_scaler = tt::CBIndex::c_12;  // single tile 存储缩放因子 1/W,用于计算均值 它用于计算 E[x²],即对所有 x² 值求和后乘以 1/W
     constexpr auto cb_eps = tt::CBIndex::c_11;     // single tile 存储 epsilon 值,用于数值稳定性
-    constexpr auto cb_out = tt::CBIndex::c_4;    // output
+    //constexpr auto cb_out = tt::CBIndex::c_4;    // output
     constexpr auto cb_gamma = tt::CBIndex::c_10;
     constexpr uint32_t cb_xmm = in0_cb_id;  // x minus mean
     constexpr auto cb_ex2 = tt::CBIndex::c_19;     // 存储 E[x²],即 x 平方的均值
@@ -144,8 +144,17 @@ void MAIN {
     // DPRINT << "Compute kernel started" << ENDL();
     // DPRINT << "compute num_blocks_w_dim"<<num_blocks_w_dim<<ENDL();
 
+    cb_wait_front(cb_scaler, 1);  // comes from the reader
+            DPRINT_UNPACK({  
+                DPRINT << "=== cb_scaler ===" << ENDL();  
+                DPRINT << TileSlice(cb_scaler, 0,   
+                    SliceRange{.h0=0,.h1=32,.hs=1,.w0=0,.w1=32,.ws=1},   
+                    true, false) << ENDL();     
+            })
+
+
     mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+        cb_im_or_out, in1_cb_id, mm_out_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         // if constexpr (get_batch_from_reader) {
         //     // Check whether this batch is valid
@@ -207,6 +216,16 @@ void MAIN {
             reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex2);
             ACQ();
             cb_wait_front(cb_xmm2, in0_block_w * num_blocks_inner_dim); //累积等待整行的所有 in0_block_w * num_blocks_inner_dim 个 tile 都准备好 这确保了归约操作可以访问完整的一行数据
+            DPRINT_UNPACK({ 
+                DPRINT << "=== Matrix AAAA ===" << ENDL();  
+                DPRINT << TileSlice(in0_cb_id, 0,  
+                    SliceRange{.h0=0,.h1=32,.hs=1,.w0=0,.w1=32,.ws=1},  
+                    true, false) << ENDL();   
+                DPRINT << "=== cb_xmm2 ===" << ENDL();  
+                DPRINT << TileSlice(cb_xmm2, 0,   
+                    SliceRange{.h0=0,.h1=32,.hs=1,.w0=0,.w1=32,.ws=1},   
+                    true, false) << ENDL();     
+            })
 
             // 外层循环以 in0_block_w 为步长遍历所有 tile
             for (uint32_t wt = 0; wt < in0_block_w * num_blocks_inner_dim; wt += in0_block_w) {
@@ -223,6 +242,12 @@ void MAIN {
 
             cb_push_back(cb_ex2, 1);
             cb_wait_front(cb_ex2, 1);
+            DPRINT_UNPACK({  
+                DPRINT << "=== cb_ex2 ===" << ENDL();  
+                DPRINT << TileSlice(cb_ex2, 0,   
+                    SliceRange{.h0=0,.h1=32,.hs=1,.w0=0,.w1=32,.ws=1},   
+                    true, false) << ENDL();     
+            })
 
             /* Var(x) + eps
             * add epsilon E[(x-E[x])^2]+eps
@@ -250,6 +275,12 @@ void MAIN {
             // 第三步：分块归一化循环，这个循环将 cb_xmm 与归一化因子 cb_ex2pe (即 1/√(E[x²]+ε)) 相乘，结果存入
             // cb_fusion
             cb_wait_front(cb_ex2pe, 1);
+            DPRINT_UNPACK({  
+                DPRINT << "=== cb_ex2pe ===" << ENDL();  
+                DPRINT << TileSlice(cb_ex2pe, 0,   
+                    SliceRange{.h0=0,.h1=32,.hs=1,.w0=0,.w1=32,.ws=1},   
+                    true, false) << ENDL();     
+            })
             DPRINT_UNPACK(DPRINT << "cb_wait_front(cb_ex2pe, 1);" << ENDL());
             for (uint32_t wt = 0; wt < in0_block_w * num_blocks_inner_dim; wt += in0_block_w) {
                 // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
@@ -315,6 +346,12 @@ void MAIN {
 
             cb_wait_front(cb_im_or_out, in0_block_num_tiles);//8
             DPRINT_UNPACK(DPRINT << "cb_wait_front(cb_im_or_out, in0_block_num_tiles);in0_block_num_tiles:"<<in0_block_num_tiles << ENDL());
+            DPRINT_UNPACK({  
+                DPRINT << "=== Input Matrix A ===" << ENDL();  
+                DPRINT << TileSlice(cb_im_or_out, 0,   
+                    SliceRange{.h0=0,.h1=32,.hs=1,.w0=0,.w1=32,.ws=1},   
+                    true, false) << ENDL();     
+            })
 
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {    // per_core_N / out_block_w = 8
                 bool enable_reload = false;
@@ -331,6 +368,12 @@ void MAIN {
 
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);//8
                     DPRINT_UNPACK(DPRINT << "cb_wait_front(in1_cb_id, in1_block_num_tiles);in1_block_num_tiles:"<<in1_block_num_tiles <<", bw:"<<bw << ", block:"<<block << ENDL());
+                    DPRINT_UNPACK({                          
+                        DPRINT << "=== Matrix B ===" << ENDL();  
+                        DPRINT << TileSlice(in1_cb_id, 0,  
+                            SliceRange{.h0=0,.h1=32,.hs=1,.w0=0,.w1=32,.ws=1},  
+                            true, false) << ENDL();  
+                    })  
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {// out_block_h / out_subblock_h = 1 / 1 = 1
@@ -343,7 +386,7 @@ void MAIN {
                                 reload_from_cb_to_dst(
                                     cb_im_or_out,
                                     in1_cb_id,
-                                    mm_partials_cb_id,
+                                    mm_out_cb_id,
                                     in1_transpose_tile,
                                     out_subblock_num_tiles,
                                     out_subblock_w,
@@ -363,7 +406,8 @@ void MAIN {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride
                                 // in0
-                                DPRINT_MATH(DPRINT << "start matmul_block();" <<", in0_index:"<<in0_index<<", in1_index:"<<in1_index<<", dst_index:"<<dst_index<<", bw:"<<bw << ", block:"<<block<< ENDL());
+                                DPRINT_MATH(DPRINT << "start matmul_block();" <<", in0_index:"<<in0_index<<", in1_index:"<<in1_index<<", dst_index:"<<dst_index
+                                    <<", out_subblock_w: "<<out_subblock_w<<", out_subblock_h: "<<out_subblock_h<<", in0_block_w: "<<in0_block_w<<", bw:"<<bw << ", block:"<<block<< ENDL());
                                 matmul_block(
                                     cb_im_or_out,
                                     in1_cb_id,
@@ -407,13 +451,10 @@ void MAIN {
                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
                                 DPRINT_PACK(DPRINT << "compute cb_push_back(mm_out_cb_id, out_subblock_num_tiles);"<< ", mm_out_cb_id:"<<static_cast<uint32_t>(mm_out_cb_id)<<", out_subblock_num_tiles:"<<out_subblock_num_tiles << ENDL());
                                 uint32_t actual_cb_size = get_local_cb_interface(mm_out_cb_id).fifo_num_pages;
-                                DPRINT_PACK(DPRINT << "actual_cb_size: " << actual_cb_size << ENDL();)
-                                DPRINT_PACK(DPRINT << "Local tiles_received: " << get_local_cb_interface(mm_out_cb_id).tiles_received << ENDL();)
+                                DPRINT_PACK(DPRINT << "actual_cb_size: " << actual_cb_size << ENDL();)//CB大小
+                                DPRINT_PACK(DPRINT << "Local tiles_received: " << get_local_cb_interface(mm_out_cb_id).tiles_received << ENDL();)//软件计数器的值
                                 volatile tt_l1_ptr uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(mm_out_cb_id);  
-                                DPRINT_PACK(DPRINT << "pages_received_ptr addr: " << (uint32_t)pages_received_ptr << ENDL();)
-                                uint32_t pages_acked = get_cb_tiles_acked_ptr(mm_out_cb_id)[0];  
-                                uint32_t received = ((uint16_t)reg_read((uintptr_t)pages_received_ptr)) - pages_acked;  
-                                DPRINT_PACK(DPRINT << "pages_received: " << received <<", pages_acked: "<<pages_acked<< ", expected: " << out_subblock_num_tiles << ENDL();)
+                                DPRINT_PACK(DPRINT << "pages_received_ptr: " << pages_received_ptr[0] << ENDL();)//硬件计数器的值
                             } else {
                                 //TR1最后执行到这 in1_subblock=2
                                 tile_regs_commit();
