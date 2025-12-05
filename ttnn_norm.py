@@ -6,9 +6,10 @@ device = ttnn.open_device(device_id=device_id,dispatch_core_config=ttnn.device.D
 
 # 32*8是一个core应该处理的量
 # 如果大于32*8*8，应该效仿attention.py，将torch_input_tensor_a reshape到batch维度
+# TODO: K值有问题，最后再改吧
 torch_input_tensor_a = torch.rand(32*8*2, 64*8*4, dtype=torch.float32)
 input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-output_tensor = ttnn.exp(input_tensor_a)
+# output_tensor = ttnn.exp(input_tensor_a)
 # torch_output_tensor = ttnn.to_torch(output_tensor)
 
 torch_input_tensor_b = torch.rand(64*8*4, 32*8*2, dtype=torch.float32)

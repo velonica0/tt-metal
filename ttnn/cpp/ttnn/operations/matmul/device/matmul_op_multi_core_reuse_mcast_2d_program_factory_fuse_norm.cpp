@@ -176,7 +176,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
     uint32_t curr_row = 0;  //curr_row += num_tile_rows_per_core;
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
 
-    // scalar
+    // scaler
     float winv = 1.0f / K;
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});

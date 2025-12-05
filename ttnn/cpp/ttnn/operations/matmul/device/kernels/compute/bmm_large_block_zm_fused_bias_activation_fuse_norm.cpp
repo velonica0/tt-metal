@@ -127,9 +127,8 @@ void MAIN {
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
     constexpr auto cb_norm_output = tt::CBIndex::c_16;
-    constexpr auto matmul_in0_cb_id = tt::CBIndex::c_17;
 
-    constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
+    constexpr uint32_t untilize_mode_out_cb_id = out_cb_id;
     constexpr int cb_im_or_out = (do_gamma ) ? cb_fusion : cb_norm_output;
 
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
@@ -147,8 +146,8 @@ void MAIN {
     // DPRINT << "Compute kernel started" << ENDL();
     // DPRINT << "num_blocks_w_dim"<<num_blocks_w_dim<<ENDL();
 
-    mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    // mm_block_init(
+    //     in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         // if constexpr (get_batch_from_reader) {
         //     // Check whether this batch is valid
@@ -185,7 +184,6 @@ void MAIN {
             for (uint32_t wt = 0; wt < in0_block_w * num_blocks_inner_dim; wt += in0_block_w) {     // num_blocks_inner_dim = num_blocks = K / in0_block_w = K(Kt)
                 // DPRINT_UNPACK(DPRINT << "cb_wait_front(cb_xmm, wt + in0_block_w);"<<", cb_xmm:"<<static_cast<uint32_t>(cb_xmm)<<", wt:"<<wt<<", in0_block_w:"<<in0_block_w << ENDL());
                 cb_wait_front(cb_xmm, wt + in0_block_w);  // cumulative wait
-                DPRINT_PACK(DPRINT << "cb_reserve_back(cb_xmm2, in0_block_w);"<<", cb_xmm2:"<<static_cast<uint32_t>(cb_xmm2)<<", in0_block_w:"<<in0_block_w << ENDL());
                 cb_reserve_back(cb_xmm2, in0_block_w);  // can probably use less space for this if we block
                 ACQ();
                 for (uint32_t wtr = 0; wtr < in0_block_w; wtr++) {
@@ -324,10 +322,11 @@ void MAIN {
 
 //norm与matmul的分隔符-----------------------------------------------------------------------------------------------------------------------------
 
+            mm_block_init(cb_im_or_out, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+        
             // 现在的输入是cb_norm_output，一整行已经在L1中。等待的是整个K(in0_block_w * num_blocks_inner_dim)
-            cb_wait_front(cb_norm_output, in0_block_w * num_blocks_inner_dim);
-            // 获取cb_norm_output的地址
-            uint32_t cb_norm_output_addr = get_read_ptr(cb_norm_output);
+            cb_wait_front(cb_im_or_out, in0_block_w * num_blocks_inner_dim);
+            uint32_t matmul_in0_index = 0;
 
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {    // 1
                 bool enable_reload = false;
@@ -341,33 +340,23 @@ void MAIN {
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {   // num_blocks_inner_dim = num_blocks = K / in0_block_w = K(Kt)
                     bool last_out = block == (num_blocks_inner_dim - 1);
-
-                    // 根据cb_norm_output_addr去获取到需要读取的数据
-                    uint32_t cb_matmul_in0_addr = cb_norm_output_addr + block * in0_block_w;
-                    // 新创建一个CB:matmul_in0_cb_id，用于实际计算matmul_tile
-                    cb_reserve_back(matmul_in0_cb_id, in0_block_num_tiles);
-                    memcpy(reinterpret_cast<void*>(cb_matmul_in0_addr),   
-                        reinterpret_cast<const void*>(cb_norm_output_addr),   
-                        in0_block_num_tiles * get_tile_size(cb_norm_output));  
-                    cb_push_back(matmul_in0_cb_id, in0_block_num_tiles);
                     
                     // cb_wait_front(in0_cb_id, in0_block_num_tiles);
-                    cb_wait_front(matmul_in0_cb_id, in0_block_num_tiles);
                     // DPRINT_UNPACK(DPRINT << "cb_wait_front(in0_cb_id, in0_block_num_tiles);" << ENDL());
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
                     // DPRINT_UNPACK(DPRINT << "cb_wait_front(in1_cb_id, in1_block_num_tiles);" << ENDL());
 
                     int in0_index_subblock_offset = 0;
-                    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {// 1（与K无关）
+                    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {// 1（与K无关）现在只有1行，因此固定为1，该循环可以去掉
                         int in1_index_subblock_offset = 0;
-                        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {// 8（与K无关）
+                        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {//  输出矩阵在宽度维度的subblock数量
                             DPRINT_PACK(DPRINT << "in1_subblock: " << in1_subblock << ", in1_num_subblocks: " << in1_num_subblocks << ENDL());
                             tile_regs_acquire();
-                            DPRINT_MATH(DPRINT << "tile_regs_acquire();" <<"in1_subblock: "<<in1_subblock<< ENDL());
+                            DPRINT_MATH(DPRINT << "tile_regs_acquire();" <<" in1_subblock: "<<in1_subblock << ENDL());
                             if (enable_reload) {
                                 reload_from_cb_to_dst(
                                     // in0_cb_id,
-                                    matmul_in0_cb_id,
+                                    cb_im_or_out,
                                     in1_cb_id,
                                     mm_partials_cb_id,
                                     in1_transpose_tile,
@@ -389,19 +378,23 @@ void MAIN {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride
                                 // in0
+                                // 对于in0只有1行的情况，matmul_block每一次调用计算的是[1*1*subblock_w]，随后在K维度叠加
                                 matmul_block(
                                     // in0_cb_id,
-                                    matmul_in0_cb_id,
+                                    cb_im_or_out,
                                     in1_cb_id,
-                                    in0_index,
-                                    in1_index,
-                                    dst_index,
+                                    // TODO:in0_index应该改变，因为cb_im_or_out相比于in0_cb_id处在循环的更外层
+                                    // in0_index,   //指定矩阵A的当前列（K维度位置）
+                                    matmul_in0_index,
+                                    in1_index,  //指定矩阵B的当前行（K维度位置）
+                                    dst_index,//subblock的意义就在于dst，dst_index就是一个输出subblock在dst寄存器的索引
                                     in1_transpose_tile,
-                                    out_subblock_w,
-                                    out_subblock_h,
+                                    out_subblock_w, //matmul_block处理[out_subblock_h*out_subblock_w]的外积，因此in1_index不用照顾到out_subblock_w参数，matmul_block内部会处理out_subblock_h参数
+                                    out_subblock_h, //matmul_block处理[out_subblock_h*out_subblock_w]的外积，因此in0_index不用照顾到out_subblock_h参数，matmul_block内部会处理out_subblock_w参数
                                     in0_block_w);
-                                DPRINT_MATH(DPRINT << "matmul_block();"<< "in1_subblock:" << in1_subblock  << ENDL());
-                                in0_index++;               // stride right by 1
+                                DPRINT_MATH(DPRINT << "matmul_block();"<< "in1_subblock:" << in1_subblock <<" out_subblock_num_tiles:" << out_subblock_num_tiles << ENDL());
+                                // in0_index++;               // stride right by 1
+                                matmul_in0_index++;
                                 in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
                                                            // (should be called in1_block_w)
                             }
@@ -433,7 +426,6 @@ void MAIN {
                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
 
                             } else {
-                                //TR1最后执行到这 in1_subblock=2
                                 tile_regs_commit();
                                 DPRINT_MATH(DPRINT << "tile_regs_commit();" << "in1_subblock:" << in1_subblock << ENDL());
                                 // Wait for tiles in output buffer to be written out since interm and output share
@@ -453,16 +445,17 @@ void MAIN {
 #ifdef PACKER_L1_ACC
                                 if (block == 0) {  // no accumulation for first iteration
                                     PACK((llk_pack_reconfig_l1_acc(0)));
+                                    DPRINT_PACK(DPRINT << "llk_pack_reconfig_l1_acc(0)" << "in1_subblock:" << in1_subblock << ENDL());
                                 } else if (block == 1) {
                                     PACK((llk_pack_reconfig_l1_acc(1)));
+                                    DPRINT_PACK(DPRINT << "llk_pack_reconfig_l1_acc(1)" << "in1_subblock:" << in1_subblock << ENDL());
                                 }
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                // TR2最后执行到这里，in1_subblock=1
                                 //将dst寄存器打包到CB
                                 pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
-                                DPRINT_PACK(DPRINT << "pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);" << "in1_subblock:" << in1_subblock << ENDL());
+                                DPRINT_PACK(DPRINT << "pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);" << "in1_subblock:" << in1_subblock<<" out_subblock_num_tiles:"<<out_subblock_num_tiles << ENDL());
 
                                 tile_regs_release();
                                 DPRINT_PACK(DPRINT << "tile_regs_release" << "in1_subblock:" << in1_subblock << ENDL());
@@ -492,8 +485,8 @@ void MAIN {
                     }
 #endif
 
+                    // 这个时候还不能pop
                     // cb_pop_front(in0_cb_id, in0_block_num_tiles);
-                    cb_pop_front(matmul_in0_cb_id, in0_block_num_tiles);
                     // DPRINT_PACK(DPRINT << "cb_pop_front(in0_cb_id, in0_block_num_tiles);" << ENDL());
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
                     // DPRINT_PACK(DPRINT << "cb_pop_front(in1_cb_id, in1_block_num_tiles);" << ENDL());
@@ -506,13 +499,13 @@ void MAIN {
                     // reconfigure unpacker df for src A
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
                     // reconfigure init for matmul
-                    // mm_block_init_short(
-                    //     in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                     mm_block_init_short(
-                        matmul_in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+                        in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                     
                 }
             }
+            // 这一行结束计算了，所以应该pop
+            cb_pop_front(cb_im_or_out, in0_block_w * num_blocks_inner_dim);
         }
         DPRINT << "for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) END END END" << ENDL();
     }

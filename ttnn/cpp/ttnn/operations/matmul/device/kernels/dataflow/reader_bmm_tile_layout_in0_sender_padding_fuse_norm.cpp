@@ -45,9 +45,9 @@ void kernel_main() {
     // Generate constant tiles for layernorm compute
 
     {
-        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
+        constexpr uint32_t cb_in_12 = tt::CBIndex::c_12;
         uint32_t scaler = get_arg_val<uint32_t>(rt_args_idx++);
-        generate_reduce_scaler(cb_in_2, scaler);
+        generate_reduce_scaler(cb_in_12, scaler);
     }
     constexpr uint32_t eps_cb_id = 11;
     const uint32_t eps = get_arg_val<uint32_t>(rt_args_idx++);
