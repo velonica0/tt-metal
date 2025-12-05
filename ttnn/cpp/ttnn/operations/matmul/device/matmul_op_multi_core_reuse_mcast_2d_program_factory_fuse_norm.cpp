@@ -830,10 +830,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig src0_cb_config =
-        tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
+        tt_metal::CircularBufferConfig(in0_CB_size * 2, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
-    log_info(tt::LogOp, "in0_CB_size:{}", in0_CB_tiles);
+    log_info(tt::LogOp, "in0_CB_size:{}", in0_CB_tiles * 2);
     if (in0_height_sharded) {
         src0_cb_config.set_globally_allocated_address(*in0_buffer);
     }
@@ -848,10 +848,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig src1_cb_config =
-        tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
+        tt_metal::CircularBufferConfig(in1_CB_size * 2, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
-    log_info(tt::LogOp, "in1_CB_size:{}", in1_CB_tiles);
+    log_info(tt::LogOp, "in1_CB_size:{}", in1_CB_tiles * 2);
     if (in1_is_sharded and not in1_is_dram) {
         src1_cb_config.set_globally_allocated_address(*in1_buffer);
     }
@@ -1042,13 +1042,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
         tt_metal::CreateCircularBuffer(program, all_cores, c_intermed4_config);
         log_info(tt::LogOp, "im4_CB_size:{}", im4_t);
 
-        uint32_t norm_out_CB_size = K * single_tile_size; // 每个core会输出K个tile
+        uint32_t norm_out_CB_size = K * single_tile_size * 2; // 每个core会输出K个tile
         uint32_t norm_output_cb_index = tt::CBIndex::c_16;
         tt::tt_metal::CircularBufferConfig norm_output_cb_config =
             tt::tt_metal::CircularBufferConfig(norm_out_CB_size, {{norm_output_cb_index, cb_data_format}})
                 .set_page_size(norm_output_cb_index, single_tile_size);
         tt_metal::CreateCircularBuffer(program, all_cores, norm_output_cb_config);
-        log_info(tt::LogOp, "norm_out_CB_size:{}", K);
+        log_info(tt::LogOp, "norm_out_CB_size:{}", K*2);
     }
     
     // Parameters for last row, col, or block
