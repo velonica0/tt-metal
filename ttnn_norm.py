@@ -62,6 +62,32 @@ program_config_fusenorm=ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm(
 # (13) batch = 32 * 8 = 256
 # (14) out_block_num_tiles = out_block_tiles = out_block_h * out_block_w = 1 * 1 = 1
 
+# in0_sender_compile_time_args
+# (0) in0_tensor_stride_w = 1
+# (1) in0_tensor_stride_h = K = 16
+# (2) in0_tensor_next_inner_dim_block_stride = in0_block_w = 8 
+# (3) in0_tensor_next_h_dim_block_stride = K*in0_block_h = 16
+# (4) in0_block_w = 8
+# (5) in0_block_h = 1
+# (6) in0_block_num_tiles = 8
+# (7) in0_last_ktile_w
+# (8) extract_shard_sub_blocks = false (not used for interleaved)
+# (9) shard_width_in_tiles = in0_shard_width_in_tiles (not used for interleaved)
+# (10) shard_height_in_tiles = in0_shard_height_in_tiles (not used for interleaved)
+# (11) num_blocks = K / in0_block_w = 16 / 8 = 2
+# (12) out_num_blocks_x = in1_num_blocks_x = per_core_N / out_block_w = 8
+# (13) out_num_blocks_y = in0_num_blocks_y = per_core_M / out_block_h = 8
+# (14) in0_mcast_sender_semaphore_id
+# (15) in0_mcast_receiver_semaphore_id
+# (16) in0_mcast_num_dests = (num_blocks_x - 1) 
+# (17) in0_mcast_num_cores = (num_blocks_x - 1) 
+# (18) MtKt = M*K = 8 * 16 = 128  
+# (19) batch = B   
+# (20) batchB = 0    
+# (21) sparsity_pagesize = 0 (placeholder since sparsity not used in this case)
+# (22) bcast_A = true  
+# (23) get_batch_from_reader = false
+
 # in1_sender_writer_compile_time_args
 # (0)in1_tensor_stride_w=1
 # (1)in1_tensor_stride_h=N=8

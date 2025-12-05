@@ -595,4 +595,5 @@ void kernel_main() {
         cb_id_out0,
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
+    DPRINT << "reader_bmm_tile_layout_in1_sender_writer_padding complete" << ENDL();
 }
