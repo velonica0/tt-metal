@@ -745,7 +745,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
         log_info(tt::LogOp, "Go reader_bmm_tile_layout_in0_receiver");
         mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_fuse_norm.cpp",
             /* in0_receiver_in1_sender, // If not using half-half noc setup */
             in0_receiver_interleaved,
             tt_metal::DataMovementConfig{
@@ -773,7 +773,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
         log_info(tt::LogOp, "Go reader_bmm_tile_layout_in0_receiver");
         mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_fuse_norm.cpp",
             in0_receiver_in1_receiver_interleaved_other_cores.value(),
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -1235,6 +1235,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
                 (std::uint32_t)in0_mcast_sender.x,  // in0_mcast_sender_noc_x
                 (std::uint32_t)in0_mcast_sender.y   // in0_mcast_sender_noc_y
             };
+
+            mm_in0_receiver_args.push_back(packed_winv_value);
+            mm_in0_receiver_args.push_back(e.u);
+            mm_in0_receiver_args.push_back(gamma_dram_addr);
+
             // left half
             if (core.x <= half_core || (!transpose_mcast and core.y == start_core_y)) {
                 tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);

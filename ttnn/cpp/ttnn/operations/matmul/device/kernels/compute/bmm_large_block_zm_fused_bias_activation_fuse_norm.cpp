@@ -184,6 +184,14 @@ void MAIN {
             reconfig_data_format(in0_cb_id, in0_cb_id);
             pack_reconfig_data_format(cb_xmm2);
 
+            DPRINT_UNPACK({
+                DPRINT << "=== cb_xmm ===, bh:" << bh << ENDL();
+                DPRINT
+                    << TileSlice(
+                           cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+                    << ENDL();
+            })
+
             // 第一步：计算 x²
             // 结果存入 cb_xmm2
             mul_tiles_init(cb_xmm, cb_xmm);
@@ -227,6 +235,14 @@ void MAIN {
             reduce_uninit();
             REL();
 
+            DPRINT_UNPACK({
+                DPRINT << "=== cb_xmm2 ===, bh:" << bh << ENDL();
+                DPRINT
+                    << TileSlice(
+                           cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+                    << ENDL();
+            })
+
             cb_push_back(cb_ex2, 1);
             cb_wait_front(cb_ex2, 1);
 
@@ -247,6 +263,32 @@ void MAIN {
             cb_push_back(cb_ex2pe, 1);
             REL();
             cb_pop_front(cb_ex2, 1);
+
+            DPRINT_UNPACK({
+                DPRINT << "=== cb_ex2 ===, bh:" << bh << ENDL();
+                DPRINT
+                    << TileSlice(
+                           cb_ex2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+                    << ENDL();
+                DPRINT << "=== cb_eps ===, bh:" << bh << ENDL();
+                DPRINT
+                    << TileSlice(
+                           cb_eps, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+                    << ENDL();
+                DPRINT << "=== cb_ex2pe ===, bh:" << bh << ENDL();
+                DPRINT
+                    << TileSlice(
+                           cb_ex2pe, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+                    << ENDL();
+                DPRINT << "=== cb_scaler ===, bh:" << bh << ENDL();
+                DPRINT << TileSlice(
+                              cb_scaler,
+                              0,
+                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                              true,
+                              false)
+                       << ENDL();
+            })
 
             /* ln(x) * gamma + beta (gamma and beta are optional)
             * now xmm = (x-E[x])

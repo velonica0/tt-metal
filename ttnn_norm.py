@@ -19,8 +19,8 @@ sequence = torch.arange(C)
 # 2. 对序列进行取模操作 (形状: [2048])
 # 结果：[0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, ...]
 row_pattern = sequence % N + 1
-torch_input_tensor_a = row_pattern.unsqueeze(0).expand(R, C).to(torch.float32)
-# torch_input_tensor_a = torch.ones(R, C, dtype=torch.float32)
+# torch_input_tensor_a = row_pattern.unsqueeze(0).expand(R, C).to(torch.float32)
+torch_input_tensor_a = torch.rand(R, C, dtype=torch.float32)
 
 input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -65,9 +65,8 @@ print("program_config_fusenorm=ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFu
 
 liner_output_tensor = ttnn.linear(rmsnorm, input_tensor_b, program_config=program_config)
 torch_linear_output_tensor = ttnn.to_torch(liner_output_tensor)
-print(torch_linear_output_tensor)
-print(torch_linear_output_tensor.shape[0])
-print(torch_linear_output_tensor.shape[1])
+torch.set_printoptions(threshold=10000)
+print(torch_linear_output_tensor[0])
 
 
 output_tensor = ttnn.exp(input_tensor_b)
@@ -81,3 +80,49 @@ print(torch_linear_norm_output_tensor[0])
 
 
 ttnn.close_device(device)
+
+
+def calculate_elementwise_pcc(tensor1, tensor2):
+    """
+    计算两个 PyTorch Tensor 元素级别的皮尔逊相关系数 (PCC)。
+    它会先将两个 Tensor 展平为一维，然后计算它们之间的相关性。
+
+    Args:
+        tensor1 (torch.Tensor): 第一个二维或多维 Tensor。
+        tensor2 (torch.Tensor): 第二个与 tensor1 形状相同的 Tensor。
+
+    Returns:
+        float: 两个 Tensor 展平后的一维数据之间的 PCC。
+    """
+    # 1. 确保两个 Tensor 形状相同
+    if tensor1.shape != tensor2.shape:
+        raise ValueError("两个 Tensor 的形状必须相同才能进行元素级别的相关性计算。")
+
+    # 2. 将 Tensor 展平为一维
+    # view(-1) 会把 Tensor 展平为包含所有元素的一维 Tensor
+    flat_t1 = tensor1.view(-1)
+    flat_t2 = tensor2.view(-1)
+
+    # 3. 计算相关系数
+    # torch.corrcoef(input) 接受一个输入矩阵，其中每一行/列是一个变量。
+    # 这里我们将 flat_t1 和 flat_t2 堆叠起来，形成一个 2xN 的矩阵，
+    # 其中 N 是元素的总数。
+    stacked_tensors = torch.stack((flat_t1, flat_t2), dim=0)
+
+    # corr_matrix 是一个 2x2 的相关系数矩阵。
+    # corr_matrix[0, 1] 或 corr_matrix[1, 0] 就是我们需要的 PCC。
+    corr_matrix = torch.corrcoef(stacked_tensors)
+
+    # 4. 提取 PCC
+    pcc = corr_matrix[0, 1].item()
+
+    return pcc
+
+
+# --- 示例用法 ---
+# 假设我们有两个 3x4 的二维 Tensor
+
+# 计算并打印结果
+pcc_ab = calculate_elementwise_pcc(torch_linear_output_tensor, torch_linear_norm_output_tensor)
+
+print(f"PCC (A, B) = {pcc_ab:.4f} (预期接近 1.0)")
