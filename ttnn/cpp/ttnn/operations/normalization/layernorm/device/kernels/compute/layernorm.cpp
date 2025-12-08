@@ -85,6 +85,7 @@ void MAIN {
 
     constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
 
+    // 行数
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
@@ -140,13 +141,25 @@ void MAIN {
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 //第一次使用：计算x^2
-                mul_tiles(cb_xmm, cb_xmm, wt + wtr, wt + wtr, wtr);     
+                mul_tiles(cb_xmm, cb_xmm, wt + wtr, wt + wtr, wtr);
                 // mul_tiles(cb_xmm, cb_col1, wt+wtr, wt+wtr, wtr);
                 pack_tile(wtr, cb_xmm2);
             }
             cb_push_back(cb_xmm2, blk);
             REL();
         }
+
+        DPRINT_UNPACK({
+            DPRINT << "ttnn.rmsnorm!!!!!!!!!!!!!!!!!!!!!!!!!!!" << ENDL();
+            DPRINT << "=== Matrix AAAA ===, " << ENDL();
+            DPRINT << TileSlice(
+                          cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+                   << ENDL();
+            DPRINT << "=== cb_xmm2 ===, " << ENDL();
+            DPRINT << TileSlice(
+                          cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+                   << ENDL();
+        })
 
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
@@ -193,6 +206,18 @@ void MAIN {
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
+        DPRINT_UNPACK({
+            DPRINT << "=== cb_eps === " << ENDL();
+            DPRINT << TileSlice(
+                          cb_eps, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+                   << ENDL();
+            DPRINT << "Wt=" << Wt << " blk=" << blk << ENDL();
+            DPRINT << "=== cb_ex2 ===, " << ENDL();
+            DPRINT << TileSlice(
+                          cb_ex2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+                   << ENDL();
+        })
+
         cb_reserve_back(cb_ex2pe, 1);  // 1
         rsqrt_tile_init<LEGACY_RSQRT>();
         rsqrt_tile<LEGACY_RSQRT>(dst0);
@@ -208,6 +233,12 @@ void MAIN {
          */
         // 分块归一化循环
         cb_wait_front(cb_ex2pe, 1);
+        DPRINT_UNPACK({
+            DPRINT << "=== cb_ex2pe === " << ENDL();
+            DPRINT << TileSlice(
+                          cb_ex2pe, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+                   << ENDL();
+        })
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
             // if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
@@ -280,6 +311,13 @@ void MAIN {
                 REL();
             }
         }
+        DPRINT_UNPACK({
+            DPRINT << "=== cb_im_or_out === " << ENDL();
+            DPRINT
+                << TileSlice(
+                       cb_im_or_out, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+                << ENDL();
+        })
         cb_pop_front(cb_ex2pe, 1);
         cb_pop_front(cb_xmm, Wt);   //因为size是Wt，所以对于norm的输入来说，肯定是全程都在L1（norm也需要两遍的使用）
 

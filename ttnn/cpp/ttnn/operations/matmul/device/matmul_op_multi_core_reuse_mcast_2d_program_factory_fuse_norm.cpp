@@ -112,9 +112,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
 
     // uint32_t in0_block_tiles = out_block_h * in0_block_w;
     // uint32_t in0_CB_tiles = in0_block_tiles;
-    uint32_t matmul_in0_block_tiles = out_block_h * in0_block_w;
-    uint32_t matmul_in0_CB_tiles = matmul_in0_block_tiles;
-    uint32_t matmul_in0_CB_size = matmul_in0_CB_tiles * in0_single_tile_size;
 
     uint32_t in0_CB_tiles = K;  // norm读取要装入整行
     if (B * num_blocks > 1) {
@@ -122,6 +119,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
+    log_info(tt::LogOp, "out_block_w:{}", out_block_w, "in0_block_w:{}", in0_block_w);
     uint32_t in1_CB_tiles = in1_block_tiles;
     if (B * num_blocks > 1) {
         in1_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
@@ -169,6 +167,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)start_core_y + num_cores_with_work_r - 1});
 
+    log_info(
+        tt::LogOp,
+        "num_cores_with_work_c:{}",
+        num_cores_with_work_c,
+        "num_cores_with_work_r:{}",
+        num_cores_with_work_r);
 
     // rmsnorm多出的参数
     // uint32_t a_addr = in0_buffer->address();
@@ -177,7 +181,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
 
     // scaler
-    float winv = 1.0f / K;
+    float winv = 1.0f / K / 32.0f;
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
     // epsilon
@@ -186,9 +190,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
         uint32_t u;
     } e{};
     e.f = eps;
-
-
-    
 
     ////////////////////////////////////////////////////////////////////////////
     //                      IN0 SHARDED SENDER/RECEIVER
@@ -438,6 +439,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
     else {
         in0_sender_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(ttnn::DataType::BFLOAT8_B)));
     }
+    // 传递norm的Wt和blk，没有必要和norm一致
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -1013,7 +1015,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
         tt_metal::CreateCircularBuffer(program, all_cores, cb_in11_config);
         //in10 - gamma
         if (gamma.has_value()) {
-            
             tt::DataFormat gamma_cb_data_format =
                 gamma.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
                                   : tt::DataFormat::Float16_b;
@@ -1056,15 +1057,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
                 .set_page_size(norm_output_cb_index, single_tile_size);
         tt_metal::CreateCircularBuffer(program, all_cores, norm_output_cb_config);
         log_info(tt::LogOp, "norm_out_CB_size:{}", K);
-
-        uint32_t matmul_in0_cb_index = tt::CBIndex::c_17;
-        tt::tt_metal::CircularBufferConfig matmul_in0_cb_config =
-            tt::tt_metal::CircularBufferConfig(matmul_in0_CB_size, {{matmul_in0_cb_index, cb_data_format}})
-                .set_page_size(matmul_in0_cb_index, single_tile_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, matmul_in0_cb_config);
-        log_info(tt::LogOp, "matmul_in0_CB_size:{}", matmul_in0_CB_size);
     }
-    
+
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;

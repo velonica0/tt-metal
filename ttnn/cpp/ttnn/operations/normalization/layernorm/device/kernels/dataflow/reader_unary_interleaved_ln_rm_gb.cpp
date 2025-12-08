@@ -7,6 +7,8 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
+#include "debug/dprint.h"
+
 // rmsnorm的reader kernel
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);       //输入张量在DRAM的地址
@@ -26,7 +28,8 @@ void kernel_main() {
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
     const DataFormat src0_data_format = get_dataformat(cb_id_in0);
 
-    constexpr uint32_t blk = get_compile_time_arg_val(0);  // 读取操作处理多少个 tile  needed for correctness of softmax/LN kernels  
+    constexpr uint32_t blk =
+        get_compile_time_arg_val(0);  // 读取操作处理多少个 tile  needed for correctness of softmax/LN kernels
     constexpr auto src0_args = TensorAccessorArgs<1>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
@@ -102,14 +105,14 @@ void kernel_main() {
                         l1_write_addr += gamma_tile_bytes;
                     }
                     /*
-                    for (uint32_t r = 0; r < blk; r++) {  
-                        uint64_t gamma_noc_addr = get_noc_addr(wt + r, addrg);  
-                        // 第一次读取:读取前 32 字节到第一个 face  
-                        noc_async_read(gamma_noc_addr, l1_write_addr, 32);  
-                        // 第二次读取:读取后 32 字节到第二个 face (偏移 512)  
-                        noc_async_read(gamma_noc_addr + 32, l1_write_addr + 512, 32);  
-                        l1_write_addr += gamma_tile_bytes;  
-                    }  
+                    for (uint32_t r = 0; r < blk; r++) {
+                        uint64_t gamma_noc_addr = get_noc_addr(wt + r, addrg);
+                        // 第一次读取:读取前 32 字节到第一个 face
+                        noc_async_read(gamma_noc_addr, l1_write_addr, 32);
+                        // 第二次读取:读取后 32 字节到第二个 face (偏移 512)
+                        noc_async_read(gamma_noc_addr + 32, l1_write_addr + 512, 32);
+                        l1_write_addr += gamma_tile_bytes;
+                    }
                     */
                     noc_async_read_barrier();
                     cb_push_back(cb_id_gamma, blk);

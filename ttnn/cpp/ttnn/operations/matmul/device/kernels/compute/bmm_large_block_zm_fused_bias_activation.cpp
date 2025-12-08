@@ -144,7 +144,22 @@ void MAIN {
 
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-    DPRINT_UNPACK(DPRINT << "num_blocks_inner_dim"<< num_blocks_inner_dim << ENDL());
+    DPRINT_UNPACK({
+        DPRINT << "tenstorrent === in0_cb_id ===, " << ENDL();
+        DPRINT << TileSlice(
+                      in0_cb_id, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+               << ENDL();
+    })
+    DPRINT_UNPACK({
+        DPRINT << "tenstorrent === in1_cb_id ===, " << ENDL();
+        DPRINT << TileSlice(
+                      in1_cb_id, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+               << ENDL();
+    })
+
+    DPRINT_UNPACK(DPRINT << "tt in0_num_subblocks" << in0_num_subblocks << ENDL());
+    DPRINT_UNPACK(DPRINT << "tt in1_num_subblocks" << in1_num_subblocks << ENDL());
+
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -192,6 +207,14 @@ void MAIN {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     // in1_block_num_tiles=per_core_N
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
+
+                    // DPRINT_UNPACK({
+                    //     DPRINT << "tenstorrent === in0_cb_id ===, bh:" << bh <<" block: "<< block << ENDL();
+                    //     DPRINT << TileSlice(
+                    //                 in0_cb_id, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                    //                 true, false)
+                    //         << ENDL();
+                    // })
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -272,6 +295,18 @@ void MAIN {
 
                                 tile_regs_release();
                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
+
+                                DPRINT_UNPACK({
+                                    DPRINT << "tenstorrent === mm_out_cb_id ===, bh:" << bh << " block: " << block
+                                           << ENDL();
+                                    DPRINT << TileSlice(
+                                                  mm_out_cb_id,
+                                                  0,
+                                                  SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                                                  true,
+                                                  false)
+                                           << ENDL();
+                                })
 
                             } else {
                                 tile_regs_commit();

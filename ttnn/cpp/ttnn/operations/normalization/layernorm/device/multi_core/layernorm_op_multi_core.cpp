@@ -261,6 +261,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t num_tile_rows = NC * Ht;  // 整个张量需要处理的“tile 行”的总数
     auto grid_size = device->compute_with_storage_grid_size();
 
+    log_info(tt::LogOp, "num_tile_rows:{}", num_tile_rows);
+
     // core分配
     auto
         [num_cores,
@@ -269,6 +271,9 @@ operation::ProgramWithCallbacks layernorm_multi_core(
          core_group_2,
          num_tile_rows_per_core_group_1,
          num_tile_rows_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid_size, num_tile_rows, true);
+
+    log_info(tt::LogOp, "num_tile_rows_per_core_group_1:{}", num_tile_rows_per_core_group_1);
+    log_info(tt::LogOp, "num_tile_rows_per_core_group_2:{}", num_tile_rows_per_core_group_2);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
