@@ -398,32 +398,36 @@ void MAIN {
 
             mm_block_init(cb_im_or_out, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 
+            // 勿删：
+            // 由于不知道对应layernorm.cpp中的cb_im_or_out哪个，所以直接与dst寄存器进行比较(dprint_tensix_dest_reg)
+            // TileSlice的第二个参数代表第几个tile，如果是8、9、10、11，则对应着layernorm.cpp中的if (wt == 8)
+            // {dprint_tensix_dest_reg(wtr);}，即打印wt从8开始的几个tile
             DPRINT_UNPACK({
                 DPRINT << "=== cb_im_or_out ===, bh:" << bh << ENDL();
                 DPRINT << TileSlice<128>(
                               cb_im_or_out,
-                              0,
+                              8,
+                              SliceRange{.h0 = 4, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 16, .ws = 1},
+                              true,
+                              false)
+                       << ENDL();
+                DPRINT << TileSlice<128>(
+                              cb_im_or_out,
+                              9,
                               SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
                               true,
                               false)
                        << ENDL();
-                DPRINT << TileSlice(
+                DPRINT << TileSlice<128>(
                               cb_im_or_out,
-                              1,
+                              10,
                               SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
                               true,
                               false)
                        << ENDL();
-                DPRINT << TileSlice(
+                DPRINT << TileSlice<128>(
                               cb_im_or_out,
-                              2,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-                DPRINT << TileSlice(
-                              cb_im_or_out,
-                              3,
+                              11,
                               SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
                               true,
                               false)

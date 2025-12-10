@@ -314,9 +314,11 @@ void MAIN {
                 //                 1}, true, false)
                 //         << ENDL();
                 // })
-                dprint_tensix_dest_reg(wtr);
+                if (wt == 8) {
+                    // 由于不知道cb_im_or_out具体应该用哪个tile，因此直接看dst寄存器的tile
+                    dprint_tensix_dest_reg(wtr);
+                }
             }
-            dprint_tensix_dest_reg(0);
             DPRINT_UNPACK({
                 DPRINT << "=== cb_xmm === wt: " << wt << " Wt: " << Wt << ENDL();
                 DPRINT

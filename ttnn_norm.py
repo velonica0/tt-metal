@@ -37,7 +37,7 @@ N = 4096  # 循环的模数 (0到7)
 sequence = torch.arange(C)
 # 2. 对序列进行取模操作 (形状: [2048])
 # 结果：[0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, ...]
-row_pattern = (sequence % N + 1) * 0.001
+row_pattern = (sequence % N + 1) * 0.01
 # torch_input_tensor_a = row_pattern.unsqueeze(0).expand(R, C).to(torch.float32)
 # torch_input_tensor_a = torch.rand(R, C, dtype=torch.float16)
 
