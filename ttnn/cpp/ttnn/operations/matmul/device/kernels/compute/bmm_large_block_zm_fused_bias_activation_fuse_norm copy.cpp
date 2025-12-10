@@ -20,7 +20,6 @@
 
 #include "debug/dprint.h"
 
-
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
@@ -75,9 +74,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
-
 void MAIN {
-
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles =
@@ -88,9 +85,12 @@ void MAIN {
     constexpr uint32_t in1_block_num_tiles =
         get_compile_time_arg_val(5);                               // out_subblock_w*in0_block_w* in1_num_subblocks;
     constexpr uint32_t in1_block_w = get_compile_time_arg_val(6);  // out_subblock_w*in1_num_subblocks
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(7);     // outer inner dim (in inner dim blocks) block在K的个数  =  num_blocks
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);         // outer inner dim (in inner dim blocks) block在W的个数
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(9);         // outer inner dim (in inner dim blocks) block在H的个数
+    constexpr uint32_t num_blocks_inner_dim =
+        get_compile_time_arg_val(7);  // outer inner dim (in inner dim blocks) block在K的个数  =  num_blocks
+    constexpr uint32_t num_blocks_w_dim =
+        get_compile_time_arg_val(8);  // outer inner dim (in inner dim blocks) block在W的个数
+    constexpr uint32_t num_blocks_h_dim =
+        get_compile_time_arg_val(9);  // outer inner dim (in inner dim blocks) block在H的个数
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(10);          // inner row block size in tiles
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);          // inner column block size in tiles
     constexpr uint32_t out_subblock_num_tiles = get_compile_time_arg_val(12);  // out_subblock_h * out_subblock_w;
@@ -118,11 +118,12 @@ void MAIN {
     constexpr uint32_t nnz_cb_id = tt::CBIndex::c_25;
     volatile uint32_t* nnz_addr_ptr;
     /*rmsnorm的CB*/
-    constexpr auto cb_scaler = tt::CBIndex::c_12;  // single tile 存储缩放因子 1/W,用于计算均值 它用于计算 E[x²],即对所有 x² 值求和后乘以 1/W
-    constexpr auto cb_eps = tt::CBIndex::c_11;     // single tile 存储 epsilon 值,用于数值稳定性
-    constexpr auto cb_out = tt::CBIndex::c_4;    // output
+    constexpr auto cb_scaler =
+        tt::CBIndex::c_12;  // single tile 存储缩放因子 1/W,用于计算均值 它用于计算 E[x²],即对所有 x² 值求和后乘以 1/W
+    constexpr auto cb_eps = tt::CBIndex::c_11;  // single tile 存储 epsilon 值,用于数值稳定性
+    constexpr auto cb_out = tt::CBIndex::c_4;   // output
     constexpr auto cb_gamma = tt::CBIndex::c_10;
-    constexpr uint32_t cb_xmm = in0_cb_id;  // x minus mean
+    constexpr uint32_t cb_xmm = in0_cb_id;         // x minus mean
     constexpr auto cb_ex2 = tt::CBIndex::c_19;     // 存储 E[x²],即 x 平方的均值
     constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // 存储 x²,即每个元素的平方
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // 存储 1/√(E[x²] + ε),即 RMS 归一化因子
@@ -131,7 +132,7 @@ void MAIN {
     constexpr auto cb_norm_output = tt::CBIndex::c_16;
 
     constexpr uint32_t untilize_mode_out_cb_id = out_cb_id;
-    constexpr int cb_im_or_out = (do_gamma ) ? cb_fusion : cb_norm_output;
+    constexpr int cb_im_or_out = (do_gamma) ? cb_fusion : cb_norm_output;
 
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 
@@ -173,7 +174,7 @@ void MAIN {
 
         // for (uint32_t ncht = 0; ncht < NCHt; ncht++)
         // ttnn.rmsnorm一个core处理一行tile，现在的话一个core处理num_blocks_h_dim行tile
-        for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {// 8
+        for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {  // 8
 
             /*
                 rmsnorm的计算
@@ -198,45 +199,58 @@ void MAIN {
             // 结果存入 cb_xmm2
             mul_tiles_init(cb_xmm, cb_xmm);
             // DPRINT_UNPACK(DPRINT << "num_blocks_inner_dim" << num_blocks_inner_dim << ENDL());
-            for (uint32_t wt = 0; wt < in0_block_w * num_blocks_inner_dim; wt += in0_block_w) {     // num_blocks_inner_dim = num_blocks = K / in0_block_w = K(Kt)
-                // DPRINT_UNPACK(DPRINT << "cb_wait_front(cb_xmm, wt + in0_block_w);"<<", cb_xmm:"<<static_cast<uint32_t>(cb_xmm)<<", wt:"<<wt<<", in0_block_w:"<<in0_block_w << ENDL());
-                cb_wait_front(cb_xmm, wt + in0_block_w);  // cumulative wait
-                cb_reserve_back(cb_xmm2, in0_block_w);    // can probably use less space for this if we block
-                ACQ();
-                for (uint32_t wtr = 0; wtr < in0_block_w; wtr++) {
-                    // 第一次使用：计算x^2
-                    mul_tiles(cb_xmm, cb_xmm, wt + wtr, wt + wtr, wtr);
-                    // mul_tiles(cb_xmm, cb_col1, wt+wtr, wt+wtr, wtr);
-                    pack_tile(wtr, cb_xmm2, wtr);
-                    // if (wt == 0 && wtr == 0) {
-                    //     DPRINT_UNPACK({
-                    //         DPRINT << "=== cb_xmm(0,0) ===, bh:" << bh << ENDL();
-                    //         DPRINT
-                    //             << TileSlice<128>(
-                    //                 cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                    //                 true, false)
-                    //             << ENDL();
-                    //     })
-                    //     dprint_tensix_dest_reg(0);
-                    // }
+            for (uint32_t wt = 0; wt < in0_block_w * num_blocks_inner_dim;
+                 wt += in0_block_w) {  // num_blocks_inner_dim = num_blocks = K / in0_block_w = K(Kt)
+                if ((wt + 1) % 8 != 0) {
+                    continue;
                 }
-                cb_push_back(cb_xmm2, in0_block_w);
+                // DPRINT_UNPACK(DPRINT << "cb_wait_front(cb_xmm, wt + in0_block_w);"<<",
+                // cb_xmm:"<<static_cast<uint32_t>(cb_xmm)<<", wt:"<<wt<<", in0_block_w:"<<in0_block_w << ENDL());
+                cb_wait_front(cb_xmm, wt + in0_block_w * 8);  // cumulative wait
+                cb_reserve_back(cb_xmm2, in0_block_w * 8);    // can probably use less space for this if we block
+                ACQ();
+                // for (uint32_t wtr = 0; wtr < in0_block_w; wtr++) {
+                //     // 第一次使用：计算x^2
+                //     mul_tiles(cb_xmm, cb_xmm, wt + wtr, wt + wtr, wtr);
+                //     // mul_tiles(cb_xmm, cb_col1, wt+wtr, wt+wtr, wtr);
+                //     pack_tile(wtr, cb_xmm2, wtr);
+                //     if (wt == 0) {
+                //         DPRINT_UNPACK({
+                //             DPRINT << "=== cb_xmm ===, bh:" << bh << ENDL();
+                //             DPRINT
+                //                 << TileSlice<128>(
+                //                     cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                //                     true, false)
+                //                 << ENDL();
+                //         })
+                //         dprint_tensix_dest_reg(0);
+                //     }
+
+                // }
+                for (uint32_t wtr = 8; wtr > 0; wtr--) {
+                    mul_tiles(cb_xmm, cb_xmm, wt - wtr + 1, wt - wtr + 1, 8 - wtr);
+                    pack_tile(8 - wtr, cb_xmm2, 8 - wtr);
+                }
+                dprint_tensix_dest_reg(0);
+                cb_push_back(cb_xmm2, in0_block_w * 8);
                 REL();
             }
             reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 
-            DPRINT_UNPACK({
-                DPRINT << "=== cb_xmm ===, bh:" << bh << ENDL();
-                DPRINT
-                    << TileSlice<128>(
-                           cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-                DPRINT << "=== cb_xmm2 ===, bh:" << bh << ENDL();
-                DPRINT
-                    << TileSlice<128>(
-                           cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-            })
+            // DPRINT_UNPACK({
+            //     DPRINT << "=== cb_xmm ===, bh:" << bh << ENDL();
+            //     DPRINT
+            //         << TileSlice<128>(
+            //                cb_xmm, 0, SliceRange{.h0 = 5, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            //     DPRINT << "=== cb_xmm2 ===, bh:" << bh << ENDL();
+            //     DPRINT
+            //         << TileSlice<128>(
+            //                cb_xmm2, 0, SliceRange{.h0 = 5, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            // })
 
             // 第二步：计算E[x^2]归一化因子
             // 这个循环对 cb_xmm2 中的所有平方值进行归约求和,然后乘以 cb_scaler 得到均值,结果存入 cb_ex2。
@@ -247,7 +261,10 @@ void MAIN {
             reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
                 cb_xmm2, cb_scaler, cb_ex2);  // 行规约，每个tile(32*32)的结果为(1*32)
             ACQ();
-            cb_wait_front(cb_xmm2, in0_block_w * num_blocks_inner_dim); //累积等待整行的所有 in0_block_w * num_blocks_inner_dim 个 tile 都准备好 这确保了归约操作可以访问完整的一行数据
+            cb_wait_front(
+                cb_xmm2,
+                in0_block_w * num_blocks_inner_dim);  // 累积等待整行的所有 in0_block_w * num_blocks_inner_dim 个 tile
+                                                      // 都准备好 这确保了归约操作可以访问完整的一行数据
 
             // 外层循环以 in0_block_w 为步长遍历所有 tile
             for (uint32_t wt = 0; wt < in0_block_w * num_blocks_inner_dim; wt += in0_block_w) {
@@ -275,8 +292,8 @@ void MAIN {
             })
 
             /* Var(x) + eps
-            * add epsilon E[(x-E[x])^2]+eps
-            */
+             * add epsilon E[(x-E[x])^2]+eps
+             */
             if constexpr (FLOAT32_DTYPE) {
                 reconfig_data_format(cb_ex2, cb_eps);
             }
@@ -319,10 +336,10 @@ void MAIN {
             })
 
             /* ln(x) * gamma + beta (gamma and beta are optional)
-            * now xmm = (x-E[x])
-            * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
-            * just need to bcast_mul xmm with cb_ex2pe
-            */
+             * now xmm = (x-E[x])
+             * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
+             * just need to bcast_mul xmm with cb_ex2pe
+             */
             // 第三步：分块归一化循环，这个循环将 cb_xmm 与归一化因子 cb_ex2pe (即 1/√(E[x²]+ε)) 相乘，结果存入
             // cb_fusion
             cb_wait_front(cb_ex2pe, 1);
@@ -330,13 +347,14 @@ void MAIN {
                 // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
                 // if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
                 reconfig_data_format(cb_xmm, cb_ex2pe);
-                if constexpr (do_gamma == 0 ) {
+                if constexpr (do_gamma == 0) {
                     pack_reconfig_data_format(cb_norm_output);
                 } else {
                     pack_reconfig_data_format(cb_fusion);
                 }
                 cb_reserve_back(cb_im_or_out, in0_block_w);
-                // DPRINT_PACK(DPRINT << "cb_reserve_back(cb_im_or_out, in0_block_w);" << " wt:" << wt <<" cb_im_or_out:"<<static_cast<uint32_t>(cb_im_or_out)<< ENDL());
+                // DPRINT_PACK(DPRINT << "cb_reserve_back(cb_im_or_out, in0_block_w);" << " wt:" << wt <<"
+                // cb_im_or_out:"<<static_cast<uint32_t>(cb_im_or_out)<< ENDL());
 
                 reconfig_data_format_srca(cb_fusion, cb_xmm);
 
@@ -346,25 +364,26 @@ void MAIN {
                     // cb_xmm[wt+wtr] since we pop in0_block_w * num_blocks_inner_dim from cb_xmm after the entire loop
                     // 第二次使用：应用归一化算子
                     mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
-                    // DPRINT_MATH(DPRINT << "mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);" << " wt:" << wt << " wtr:" << wtr << ENDL());
+                    // DPRINT_MATH(DPRINT << "mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);" << " wt:" << wt
+                    // << " wtr:" << wtr << ENDL());
                     pack_tile(wtr, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
                 }
 
-                cb_push_back(cb_im_or_out, in0_block_w);  // if no gamma/beta are provided, this will be passed on to the writer
-                // DPRINT_PACK(DPRINT << "cb_push_back(cb_im_or_out, in0_block_w);" << " wt:" << wt <<" cb_im_or_out:"<<static_cast<uint32_t>(cb_im_or_out)<< ENDL());
+                cb_push_back(
+                    cb_im_or_out, in0_block_w);  // if no gamma/beta are provided, this will be passed on to the writer
+                // DPRINT_PACK(DPRINT << "cb_push_back(cb_im_or_out, in0_block_w);" << " wt:" << wt <<"
+                // cb_im_or_out:"<<static_cast<uint32_t>(cb_im_or_out)<< ENDL());
                 REL();
 
-                if constexpr (!(do_gamma == 0 )) {
-
+                if constexpr (!(do_gamma == 0)) {
                     reconfig_data_format_srca(cb_xmm, cb_fusion);
-
                 }
                 if constexpr (do_gamma) {
                     pack_reconfig_data_format(cb_norm_output);
 
                     reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                     ACQ();
-                    uint32_t cb_outg = cb_norm_output ;
+                    uint32_t cb_outg = cb_norm_output;
                     mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                     cb_reserve_back(cb_outg, in0_block_w);
                     cb_wait_front(cb_gamma, wt + in0_block_w);  // we don't pop, TODO: only wait on first ht
@@ -376,13 +395,18 @@ void MAIN {
                     cb_pop_front(cb_fusion, in0_block_w);
                     // we don't pop gamma
                     cb_push_back(cb_outg, in0_block_w);
-                    // We don't pop gamma since it's 1,1,1,in0_block_w * num_blocks_inner_dim and we reuse it for all NCHt
+                    // We don't pop gamma since it's 1,1,1,in0_block_w * num_blocks_inner_dim and we reuse it for all
+                    // NCHt
                     REL();
                 }
             }
             cb_pop_front(cb_ex2pe, 1);
-            // DPRINT_UNPACK(DPRINT << "cb_pop_front(cb_ex2pe, 1);" << ", cb_ex2pe:"<<static_cast<uint32_t>(cb_ex2pe) << ENDL());
-            cb_pop_front(cb_xmm, in0_block_w * num_blocks_inner_dim);   //因为size是Wt，所以对于norm的输入来说，肯定是全程都在L1（norm也需要两遍的使用）
+            // DPRINT_UNPACK(DPRINT << "cb_pop_front(cb_ex2pe, 1);" << ", cb_ex2pe:"<<static_cast<uint32_t>(cb_ex2pe) <<
+            // ENDL());
+            cb_pop_front(
+                cb_xmm,
+                in0_block_w *
+                    num_blocks_inner_dim);  // 因为size是Wt，所以对于norm的输入来说，肯定是全程都在L1（norm也需要两遍的使用）
             // DPRINT_UNPACK(
             //     DPRINT << "cb_pop_front(cb_xmm, in0_block_w * num_blocks_inner_dim);"
             //            << ", cb_xmm:" << static_cast<uint32_t>(cb_xmm)
@@ -394,68 +418,52 @@ void MAIN {
             //     cb_pop_front(cb_norm_output, in0_block_w);
             // }
 
-//norm与matmul的分隔符-----------------------------------------------------------------------------------------------------------------------------
+            // norm与matmul的分隔符-----------------------------------------------------------------------------------------------------------------------------
 
-            mm_block_init(cb_im_or_out, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+            mm_block_init(
+                cb_im_or_out,
+                in1_cb_id,
+                mm_partials_cb_id,
+                in1_transpose_tile,
+                out_subblock_w,
+                out_subblock_h,
+                in0_block_w);
 
             DPRINT_UNPACK({
                 DPRINT << "=== cb_im_or_out ===, bh:" << bh << ENDL();
-                DPRINT << TileSlice<128>(
+                DPRINT << TileSlice(
                               cb_im_or_out,
                               0,
                               SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
                               true,
                               false)
                        << ENDL();
-                DPRINT << TileSlice(
-                              cb_im_or_out,
-                              1,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-                DPRINT << TileSlice(
-                              cb_im_or_out,
-                              2,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-                DPRINT << TileSlice(
-                              cb_im_or_out,
-                              3,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-
             })
-            // DPRINT_UNPACK({
-            //     DPRINT << "=== in1_cb_id ===, bh:" << bh << ENDL();
-            //     DPRINT << TileSlice(
-            //                   in1_cb_id,
-            //                   0,
-            //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-            //                   true,
-            //                   false)
-            //            << ENDL();
-            // })
+            DPRINT_UNPACK({
+                DPRINT << "=== in1_cb_id ===, bh:" << bh << ENDL();
+                DPRINT << TileSlice(
+                              in1_cb_id,
+                              0,
+                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                              true,
+                              false)
+                       << ENDL();
+            })
 
             // 现在的输入是cb_norm_output，一整行已经在L1中。等待的是整个K(in0_block_w * num_blocks_inner_dim)
             cb_wait_front(cb_im_or_out, in0_block_w * num_blocks_inner_dim);
             uint32_t matmul_in0_index = 0;
 
-            for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {    // 1
+            for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {  // 1
                 bool enable_reload = false;
                 uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
-
-
 
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
                     PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                 }
 
-                for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {   // num_blocks_inner_dim = num_blocks = K / in0_block_w = K(Kt)
+                for (uint32_t block = 0; block < num_blocks_inner_dim;
+                     block++) {  // num_blocks_inner_dim = num_blocks = K / in0_block_w = K(Kt)
                     bool last_out = block == (num_blocks_inner_dim - 1);
 
                     // cb_wait_front(in0_cb_id, in0_block_num_tiles);
@@ -473,7 +481,8 @@ void MAIN {
                     // })
 
                     int in0_index_subblock_offset = 0;
-                    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {// 1（与K无关）现在只有1行，因此固定为1，该循环可以去掉
+                    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks;
+                         in0_subblock++) {  // 1（与K无关）现在只有1行，因此固定为1，该循环可以去掉
                         int in1_index_subblock_offset = 0;
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks;
                              in1_subblock++) {  // 8  输出矩阵在宽度维度的subblock数量
@@ -517,11 +526,11 @@ void MAIN {
                                     // TODO:in0_index应该改变，因为cb_im_or_out相比于in0_cb_id处在循环的更外层
                                     // in0_index,   //指定矩阵A的当前列（K维度位置）
                                     matmul_in0_index,
-                                    in1_index,  //指定矩阵B的当前行（K维度位置）
-                                    dst_index,//subblock的意义就在于dst，dst_index就是一个输出subblock在dst寄存器的索引
+                                    in1_index,  // 指定矩阵B的当前行（K维度位置）
+                                    dst_index,  // subblock的意义就在于dst，dst_index就是一个输出subblock在dst寄存器的索引
                                     in1_transpose_tile,
-                                    out_subblock_w, //matmul_block处理[out_subblock_h*out_subblock_w]的外积，因此in1_index不用照顾到out_subblock_w参数，matmul_block内部会处理out_subblock_h参数
-                                    out_subblock_h, //matmul_block处理[out_subblock_h*out_subblock_w]的外积，因此in0_index不用照顾到out_subblock_h参数，matmul_block内部会处理out_subblock_w参数
+                                    out_subblock_w,  // matmul_block处理[out_subblock_h*out_subblock_w]的外积，因此in1_index不用照顾到out_subblock_w参数，matmul_block内部会处理out_subblock_h参数
+                                    out_subblock_h,  // matmul_block处理[out_subblock_h*out_subblock_w]的外积，因此in0_index不用照顾到out_subblock_h参数，matmul_block内部会处理out_subblock_w参数
                                     in0_block_w);
                                 // DPRINT_MATH(DPRINT << "matmul_block();"<< "in1_subblock:" << in1_subblock <<"
                                 // out_subblock_num_tiles:" << out_subblock_num_tiles << ENDL()); in0_index++; // stride
@@ -534,7 +543,6 @@ void MAIN {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
-
                                 tile_regs_commit();
                                 // Pack out to output buffer
                                 cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
@@ -588,15 +596,19 @@ void MAIN {
 #ifdef PACKER_L1_ACC
                                 if (block == 0) {  // no accumulation for first iteration
                                     PACK((llk_pack_reconfig_l1_acc(0)));
-                                    DPRINT_PACK(DPRINT << "llk_pack_reconfig_l1_acc(0)" << "in1_subblock:" << in1_subblock << ENDL());
+                                    DPRINT_PACK(
+                                        DPRINT << "llk_pack_reconfig_l1_acc(0)" << "in1_subblock:" << in1_subblock
+                                               << ENDL());
                                 } else if (block == 1) {
                                     PACK((llk_pack_reconfig_l1_acc(1)));
-                                    DPRINT_PACK(DPRINT << "llk_pack_reconfig_l1_acc(1)" << "in1_subblock:" << in1_subblock << ENDL());
+                                    DPRINT_PACK(
+                                        DPRINT << "llk_pack_reconfig_l1_acc(1)" << "in1_subblock:" << in1_subblock
+                                               << ENDL());
                                 }
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                //将dst寄存器打包到CB
+                                // 将dst寄存器打包到CB
                                 pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
                                 // DPRINT_PACK(DPRINT << "pack_tile_block(start_dst_index, mm_partials_cb_id,
                                 // out_subblock_num_tiles);" << "in1_subblock:" << in1_subblock<<"
@@ -621,7 +633,7 @@ void MAIN {
                             in1_index_subblock_offset += out_subblock_w;
                         }  // in1_num_subblocks
                         in0_index_subblock_offset += in0_subblock_num_tiles;
-                    }   //in0_num_subblocks
+                    }  // in0_num_subblocks
 
 #ifdef PACKER_L1_ACC
 
@@ -645,12 +657,10 @@ void MAIN {
                     // DPRINT_PACK(DPRINT << "cb_pop_front(in0_cb_id, in0_block_num_tiles);" << ENDL());
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
                     // DPRINT_PACK(DPRINT << "cb_pop_front(in1_cb_id, in1_block_num_tiles);" << ENDL());
-                }   //num_blocks_inner_dim
-
+                }  // num_blocks_inner_dim
 
                 // 与PACK((pack_reconfig_data_format(mm_partials_cb_id)));对应，将srca从mm_partials_cb_id切换为in1_cb_id
                 if constexpr (batch > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
-
                     // reconfigure unpacker df for src A
                     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
                     // reconfigure init for matmul

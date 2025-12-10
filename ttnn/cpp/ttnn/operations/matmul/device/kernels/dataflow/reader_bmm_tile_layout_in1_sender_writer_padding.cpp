@@ -502,7 +502,6 @@ void kernel_main() {
                     for (uint32_t sbh = 0; sbh < out_num_nonzero_subblocks_h_; ++sbh) {
                         uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
                         for (uint32_t sbw = 0; sbw < out_num_nonzero_subblocks_w_; ++sbw) {
-                            DPRINT<<"sbh:" << sbh << " sbw:" << sbw << ENDL();
                             uint32_t out_tensor_sb_row_start_tile_id = out_tensor_sbw_start_tile_id;
 
                             uint32_t out_subblock_h_ = out_subblock_h;

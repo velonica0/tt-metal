@@ -1,5 +1,24 @@
 import torch
 import ttnn
+import numpy as np
+
+
+def rmsnorm_no_weight(X, eps=1e-6):
+    """
+    无 weight 参数的 RMSNorm 实现。
+    输入 X 是一个二维矩阵 (R, C)。
+    """
+    # 1. 计算均方根 (RMS)
+    # X.pow(2) 计算元素平方
+    # .mean(dim=-1, keepdim=True) 对最后一个维度（列/特征维度 C）求均值，并保持维度
+    # .sqrt() 求平方根
+    rms = X.pow(2).mean(dim=-1, keepdim=True).sqrt()
+
+    # 2. 归一化：X / (rms + eps)
+    Y = X / (rms + eps)
+
+    return Y
+
 
 device_id = 0
 device = ttnn.open_device(device_id=device_id, dispatch_core_config=ttnn.device.DispatchCoreConfig())
@@ -11,25 +30,44 @@ device = ttnn.open_device(device_id=device_id, dispatch_core_config=ttnn.device.
 
 # 定义张量尺寸
 R = 32 * 8 * 2 * 2  # 行数 = 512
-C = 64 * 8 * 4 * 2  # 列数 = 2048
-N = 8  # 循环的模数 (0到7)
+C = 64 * 8 * 4 * 2  # 列数 = 4096
+N = 4096  # 循环的模数 (0到7)
 # 1. 创建从 0 到 C-1 的序列 (形状: [2048])
 # 例如：[0, 1, 2, ..., 2047]
 sequence = torch.arange(C)
 # 2. 对序列进行取模操作 (形状: [2048])
 # 结果：[0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, ...]
-row_pattern = sequence % N + 1
+row_pattern = (sequence % N + 1) * 0.001
 # torch_input_tensor_a = row_pattern.unsqueeze(0).expand(R, C).to(torch.float32)
-torch_input_tensor_a = torch.rand(R, C, dtype=torch.float32)
+# torch_input_tensor_a = torch.rand(R, C, dtype=torch.float16)
 
+# 4. 创建一个形状为 [R, C] 的全零张量，用于存放结果
+torch_input_tensor_a = torch.zeros(R, C, dtype=torch.float16)
+
+# 5. 设置第一行 (第 0 行) 的值为 row_pattern_base
+torch_input_tensor_a[0, :] = row_pattern
+
+# 6. 循环计算后续每一行：当前行 = 上一行 * 2
+# 注意：PyTorch 的乘法是元素级的
+for i in range(1, 32):
+    # 计算 i 行为 i-1 行的 2 倍
+    # 这一步是您要求实现的“每一行都比上一行*2”的逻辑
+    torch_input_tensor_a[i, :] = torch_input_tensor_a[i - 1, :] * 3.0
+
+# torch_input_tensor_a = torch.rand(R, C, dtype=torch.float16)
 input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+rmsnorm_torch = rmsnorm_no_weight(torch_input_tensor_a)
 
 
 rmsnorm = ttnn.rms_norm(input_tensor_a, epsilon=1e-5)
+torch_rmsnorm_output_tensor = ttnn.to_torch(rmsnorm)
+torch.set_printoptions(threshold=10000)
+# print(rmsnorm_torch[0])
+print(torch_rmsnorm_output_tensor[0])
 # torch_output_tensor = ttnn.to_torch(output_tensor)
 
 # torch_input_tensor_b = torch.rand(64*8*4, 32*8*2, dtype=torch.float32)
-torch_input_tensor_b = torch.ones(C, R, dtype=torch.float32)
+torch_input_tensor_b = torch.ones(C, R, dtype=torch.float16)
 input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 output_tensor = ttnn.exp(input_tensor_b)
@@ -63,66 +101,99 @@ program_config_fusenorm = ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNor
 
 print("program_config_fusenorm=ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm")
 
-liner_output_tensor = ttnn.linear(rmsnorm, input_tensor_b, program_config=program_config)
-torch_linear_output_tensor = ttnn.to_torch(liner_output_tensor)
-torch.set_printoptions(threshold=10000)
-print(torch_linear_output_tensor[0])
+# liner_output_tensor = ttnn.linear(rmsnorm, input_tensor_b, program_config=program_config)
+# torch_linear_output_tensor = ttnn.to_torch(liner_output_tensor)
+# # torch.set_printoptions(threshold=10000)
+# print(torch_linear_output_tensor[0])
 
+
+# torch_matmul_output_tensor = torch.matmul(rmsnorm_torch, torch_input_tensor_b)
 
 output_tensor = ttnn.exp(input_tensor_b)
+compute_kernel_config = ttnn.init_device_compute_kernel_config(
+    device.arch(),
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=True,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
 linear_norm_output_tensor = ttnn.linear_norm(
-    input_tensor_a, input_tensor_b, gamma=None, epsilon=1e-5, program_config=program_config_fusenorm
+    input_tensor_a,
+    input_tensor_b,
+    gamma=None,
+    epsilon=1e-5,
+    program_config=program_config_fusenorm,
+    compute_kernel_config=compute_kernel_config,
 )
 torch_linear_norm_output_tensor = ttnn.to_torch(linear_norm_output_tensor)
 
-torch.set_printoptions(threshold=10000)
+# torch.set_printoptions(threshold=10000)
+# print(torch_matmul_output_tensor[0])
 print(torch_linear_norm_output_tensor[0])
 
 
 ttnn.close_device(device)
 
 
-def calculate_elementwise_pcc(tensor1, tensor2):
-    """
-    计算两个 PyTorch Tensor 元素级别的皮尔逊相关系数 (PCC)。
-    它会先将两个 Tensor 展平为一维，然后计算它们之间的相关性。
+def comp_pcc(golden, calculated, pcc=0.99):
+    golden = torch.Tensor(golden)
+    calculated = torch.Tensor(calculated)
 
-    Args:
-        tensor1 (torch.Tensor): 第一个二维或多维 Tensor。
-        tensor2 (torch.Tensor): 第二个与 tensor1 形状相同的 Tensor。
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
 
-    Returns:
-        float: 两个 Tensor 展平后的一维数据之间的 PCC。
-    """
-    # 1. 确保两个 Tensor 形状相同
-    if tensor1.shape != tensor2.shape:
-        raise ValueError("两个 Tensor 的形状必须相同才能进行元素级别的相关性计算。")
+    if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
+        logger.warning("Both tensors are 'nan'")
+        return True, 1.0
 
-    # 2. 将 Tensor 展平为一维
-    # view(-1) 会把 Tensor 展平为包含所有元素的一维 Tensor
-    flat_t1 = tensor1.view(-1)
-    flat_t2 = tensor2.view(-1)
+    if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
+        logger.error("One tensor is all nan, the other is not.")
+        return False, 0.0
 
-    # 3. 计算相关系数
-    # torch.corrcoef(input) 接受一个输入矩阵，其中每一行/列是一个变量。
-    # 这里我们将 flat_t1 和 flat_t2 堆叠起来，形成一个 2xN 的矩阵，
-    # 其中 N 是元素的总数。
-    stacked_tensors = torch.stack((flat_t1, flat_t2), dim=0)
+    # Test if either is completely zero
+    if torch.any(golden.bool()) != torch.any(calculated.bool()):
+        logger.error("One tensor is all zero")
+        return False, 0.0
 
-    # corr_matrix 是一个 2x2 的相关系数矩阵。
-    # corr_matrix[0, 1] 或 corr_matrix[1, 0] 就是我们需要的 PCC。
-    corr_matrix = torch.corrcoef(stacked_tensors)
+    # For now, mask all infs and nans so that we check the rest... TODO
+    golden = golden.clone()
+    golden[
+        torch.logical_or(
+            torch.isnan(golden),
+            torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
+        )
+    ] = 0
+    calculated = calculated.clone()
+    calculated[
+        torch.logical_or(
+            torch.isnan(calculated),
+            torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
+        )
+    ] = 0
 
-    # 4. 提取 PCC
-    pcc = corr_matrix[0, 1].item()
+    if torch.equal(golden, calculated):
+        return True, 1.0
 
-    return pcc
+    if golden.dtype == torch.bfloat16:
+        golden = golden.type(torch.float32)
+        calculated = calculated.type(torch.float32)
+    cal_pcc = np.min(
+        np.ma.corrcoef(
+            np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
+            np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
+        )
+    )
+
+    if isinstance(cal_pcc, np.ma.core.MaskedConstant):
+        return True, 1.0
+
+    return cal_pcc >= pcc, cal_pcc
 
 
 # --- 示例用法 ---
 # 假设我们有两个 3x4 的二维 Tensor
 
 # 计算并打印结果
-pcc_ab = calculate_elementwise_pcc(torch_linear_output_tensor, torch_linear_norm_output_tensor)
+passing, pcc_message = comp_pcc(torch_matmul_output_tensor, torch_linear_norm_output_tensor)
 
-print(f"PCC (A, B) = {pcc_ab:.4f} (预期接近 1.0)")
+print(f"PCC: {pcc_message}")
