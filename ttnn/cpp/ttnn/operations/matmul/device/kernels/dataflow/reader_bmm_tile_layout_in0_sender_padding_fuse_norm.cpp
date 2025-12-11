@@ -47,6 +47,7 @@ void kernel_main() {
         constexpr uint32_t cb_in_12 = tt::CBIndex::c_12;
         uint32_t scaler = get_arg_val<uint32_t>(rt_args_idx++);
         generate_reduce_scaler(cb_in_12, scaler);
+        DPRINT << "in0 scaler=" << scaler << ENDL();
     }
     constexpr uint32_t eps_cb_id = 11;
     const uint32_t eps = get_arg_val<uint32_t>(rt_args_idx++);
@@ -236,11 +237,12 @@ void kernel_main() {
 
                         // Copy in0 block into CB, as the default kernel
                         uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
-                        for (uint32_t h = 0; h < in0_block_h; ++h) {    //显示指定为1
+                        // for (uint32_t h = 0; h < in0_block_h; ++h) {    //显示指定为1
                             uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                             //对应 for (uint32_t r = 0; r < blk; r++)
                             for (uint32_t w = 0; w < in0_block_w; ++w) {
-                                if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
+                                // if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
+                                if (bh < num_blocks_h_dim - 1) {
                                     // DPRINT << "noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);" << " bh=" << bh << ",  bw=" << bw << ",  block=" << block << ",  h=" << h << ", w=" << w << ENDL();
                                     noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
                                 }
@@ -261,16 +263,44 @@ void kernel_main() {
 
 
                             }
-                            in0_tensor_row_start_tile_id += in0_tensor_stride_h;//K
+                            // in0_tensor_row_start_tile_id += in0_tensor_stride_h;//K
 
-                        }
+                        //}
                         in0_tensor_current_inner_dim_block_start_tile_id += in0_tensor_next_inner_dim_block_stride;//in0_block_w
 
                         // Barrier! make sure the reads are done
                         noc_async_read_barrier();
                         DPRINT << "reader in0 a block, bh:" << bh << ", block:" << block << ENDL();
 
-                        //mcast的地方，我给删了！！！！！！！！！！！！！！！！！！！！！！！！！！！
+// #ifndef SKIP_MCAST
+//                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
+//                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
+//                         // zero for the next block
+//                         noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
+//                         noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
+
+//                         // Now we have the block in the CB address, we can mcast to dests!
+//                         uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
+
+//                         // num_dests must not include source, since we are NOT really doing a local copy!
+//                         noc_async_write_multicast(
+//                             in0_start_address,
+//                             in0_multicast_data_addr,
+//                             in0_block_size_bytes,
+//                             in0_mcast_num_cores,
+//                             true);
+
+//                         // Note: no need for write barrier, since these two multicasts are done on the same noc id, same
+//                         // vc, same cmd_buf Also, this only works because we are setting VCs statically (using
+//                         // NOC_CMD_STATIC_VC).
+
+//                         // We should also multicast the flag to destinations
+//                         // num_dests must not include source, since we are NOT really doing a local copy!
+//                         noc_semaphore_set_multicast(
+//                             in0_mcast_receiver_semaphore_addr,
+//                             in0_mcast_receiver_semaphore_noc_addr,
+//                             in0_mcast_num_cores);
+// #endif  // SKIP_MCAST
          
                         // Common for sharded and interleaved paths
                         DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles);" << "in0_block_num_tiles=" << in0_block_num_tiles << ENDL();
