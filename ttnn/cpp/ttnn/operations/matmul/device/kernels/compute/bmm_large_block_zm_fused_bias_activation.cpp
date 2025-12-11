@@ -8,6 +8,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "mod_div_lib.h"
+#include "dprint_tensix.h"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
@@ -123,6 +124,9 @@ void MAIN {
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
+    DPRINT_UNPACK(DPRINT << "tt in0_num_subblocks " << in0_num_subblocks << ENDL());
+    DPRINT_UNPACK(DPRINT << "tt in1_num_subblocks " << in1_num_subblocks << ENDL());
+
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_3;
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
@@ -157,9 +161,6 @@ void MAIN {
                << ENDL();
     })
 
-    DPRINT_UNPACK(DPRINT << "tt in0_num_subblocks" << in0_num_subblocks << ENDL());
-    DPRINT_UNPACK(DPRINT << "tt in1_num_subblocks" << in1_num_subblocks << ENDL());
-
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
@@ -193,6 +194,7 @@ void MAIN {
                     PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                 }
 
+                // 只有最后一个block是实际的输出，block这个维度是累加结果的
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     bool last_out = block == (num_blocks_inner_dim - 1);
 // Configure packer once for pack out without Bias
@@ -233,12 +235,43 @@ void MAIN {
                                     in0_block_w);
                             }
 
-#ifndef SKIP_COMPUTE
                             // Compute output sub-block
                             uint32_t dst_index =
                                 0;  // start at 0, each call to matmul_block internally increments dst_index
                             uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                             uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
+                            DPRINT_UNPACK({ DPRINT << "correct in0_index: " << in0_index << ENDL(); })
+                            if (block == 0 && in0_subblock == 0 && in1_subblock == 0) {
+                                // DPRINT << "out_subblock_w:" << out_subblock_w << ENDL(); 1
+                                // DPRINT << "out_subblock_h:" << out_subblock_h << ENDL(); 1
+                                DPRINT_UNPACK({
+                                    DPRINT << "matmul_in0_index: " << in0_cb_id << ENDL();
+                                    DPRINT << "tt === cb_im_or_out ===, bh:" << bh << ENDL();
+                                    DPRINT << TileSlice(
+                                                  in0_cb_id,
+                                                  in0_index,
+                                                  SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                                                  true,
+                                                  false)
+                                           << ENDL();
+                                })
+                            }
+                            if (block == 1 && in0_subblock == 0 && in1_subblock == 0) {
+                                // DPRINT << "out_subblock_w:" << out_subblock_w << ENDL(); 1
+                                // DPRINT << "out_subblock_h:" << out_subblock_h << ENDL(); 1
+                                DPRINT_UNPACK({
+                                    DPRINT << "matmul_in0_index: " << in0_cb_id << ENDL();
+                                    DPRINT << "tt === cb_im_or_out ===, bh:" << bh << ENDL();
+                                    DPRINT << TileSlice(
+                                                  in0_cb_id,
+                                                  in0_index,
+                                                  SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                                                  true,
+                                                  false)
+                                           << ENDL();
+                                })
+                            }
+
                             // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
                             for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
                                 // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
@@ -258,9 +291,13 @@ void MAIN {
                                 in0_index++;               // stride right by 1
                                 in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
                                                            // (should be called in1_block_w)
+                                if (block == 1 && in0_subblock == 0 && in1_subblock == 0) {
+                                    // DPRINT << "out_subblock_w:" << out_subblock_w << ENDL(); 1
+                                    // DPRINT << "out_subblock_h:" << out_subblock_h << ENDL(); 1
+                                    DPRINT_MATH({ DPRINT << "dst_index:" << dst_index << ENDL(); })
+                                    dprint_tensix_dest_reg(dst_index);
+                                }
                             }
-
-#endif  // SKIP_COMPUTE
 
                             if (last_out) {
 // If we fuse bias, we will pack out and run bias + optional sfpu in a separate loop
@@ -334,6 +371,18 @@ void MAIN {
 
                                 tile_regs_release();
                                 cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
+
+                                DPRINT_UNPACK({
+                                    DPRINT << "tt === mm_partials_cb_id ===, bh:" << bh << " block: " << block
+                                           << ENDL();
+                                    DPRINT << TileSlice(
+                                                  mm_partials_cb_id,
+                                                  0,
+                                                  SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                                                  true,
+                                                  false)
+                                           << ENDL();
+                                })
                             }
 
                             in1_index_subblock_offset += out_subblock_w;

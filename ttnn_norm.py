@@ -29,15 +29,15 @@ device = ttnn.open_device(device_id=device_id, dispatch_core_config=ttnn.device.
 # torch_input_tensor_a = torch.rand(32*8*2, 64*8*4, dtype=torch.float32)
 
 # 定义张量尺寸
-R = 32 * 8 * 2 * 2  # 行数 = 512
-C = 64 * 8 * 4 * 2  # 列数 = 4096
-N = 4096  # 循环的模数 (0到7)
+R = 32 * 8 * 8  # 行数 = 512
+C = 32 * 8 * 2  # 列数 = 4096
+N = C  # 循环的模数 (0到7)
 # 1. 创建从 0 到 C-1 的序列 (形状: [2048])
 # 例如：[0, 1, 2, ..., 2047]
 sequence = torch.arange(C)
 # 2. 对序列进行取模操作 (形状: [2048])
 # 结果：[0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, ...]
-row_pattern = (sequence % N + 1) * 0.01
+row_pattern = (sequence % N + 1) * 0.001
 # torch_input_tensor_a = row_pattern.unsqueeze(0).expand(R, C).to(torch.float32)
 # torch_input_tensor_a = torch.rand(R, C, dtype=torch.float16)
 
@@ -49,25 +49,30 @@ torch_input_tensor_a[0, :] = row_pattern
 
 # 6. 循环计算后续每一行：当前行 = 上一行 * 2
 # 注意：PyTorch 的乘法是元素级的
-for i in range(1, 32):
+for i in range(1, R):
     # 计算 i 行为 i-1 行的 2 倍
     # 这一步是您要求实现的“每一行都比上一行*2”的逻辑
-    torch_input_tensor_a[i, :] = torch_input_tensor_a[i - 1, :] * 3.0
+    torch_input_tensor_a[i, :] = torch_input_tensor_a[i - 1, :] * 1.0
 
-# torch_input_tensor_a = torch.rand(R, C, dtype=torch.float16)
+# print("torch_input_tensor_a")
+# print(torch_input_tensor_a)
+
+torch_input_tensor_a = torch.rand(R, C, dtype=torch.float16)
 input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 rmsnorm_torch = rmsnorm_no_weight(torch_input_tensor_a)
 
 
 rmsnorm = ttnn.rms_norm(input_tensor_a, epsilon=1e-5)
 torch_rmsnorm_output_tensor = ttnn.to_torch(rmsnorm)
-torch.set_printoptions(threshold=10000)
-# print(rmsnorm_torch[0])
+torch.set_printoptions(threshold=100000)
+print("torch_rmsnorm_output_tensor[0]")
 print(torch_rmsnorm_output_tensor[0])
+
+
 # torch_output_tensor = ttnn.to_torch(output_tensor)
 
-# torch_input_tensor_b = torch.rand(64*8*4, 32*8*2, dtype=torch.float32)
-torch_input_tensor_b = torch.ones(C, R, dtype=torch.float16)
+torch_input_tensor_b = torch.rand(C, R, dtype=torch.float16)
+# torch_input_tensor_b = torch.ones(C, R, dtype=torch.float16)
 input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 output_tensor = ttnn.exp(input_tensor_b)
@@ -101,13 +106,13 @@ program_config_fusenorm = ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNor
 
 print("program_config_fusenorm=ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm")
 
-# liner_output_tensor = ttnn.linear(rmsnorm, input_tensor_b, program_config=program_config)
-# torch_linear_output_tensor = ttnn.to_torch(liner_output_tensor)
-# # torch.set_printoptions(threshold=10000)
+liner_output_tensor = ttnn.linear(rmsnorm, input_tensor_b, program_config=program_config)
+torch_linear_output_tensor = ttnn.to_torch(liner_output_tensor)
+# print("torch_linear_output_tensor")
 # print(torch_linear_output_tensor[0])
 
 
-# torch_matmul_output_tensor = torch.matmul(rmsnorm_torch, torch_input_tensor_b)
+torch_matmul_output_tensor = torch.matmul(rmsnorm_torch, torch_input_tensor_b)
 
 output_tensor = ttnn.exp(input_tensor_b)
 compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -128,8 +133,8 @@ linear_norm_output_tensor = ttnn.linear_norm(
 torch_linear_norm_output_tensor = ttnn.to_torch(linear_norm_output_tensor)
 
 # torch.set_printoptions(threshold=10000)
-# print(torch_matmul_output_tensor[0])
-print(torch_linear_norm_output_tensor[0])
+print(torch_matmul_output_tensor[0])
+# print(torch_linear_norm_output_tensor[0])
 
 
 ttnn.close_device(device)

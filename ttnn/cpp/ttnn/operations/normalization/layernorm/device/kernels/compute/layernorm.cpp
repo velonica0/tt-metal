@@ -145,19 +145,19 @@ void MAIN {
                 mul_tiles(cb_xmm, cb_xmm, wt + wtr, wt + wtr, wtr);
                 // mul_tiles(cb_xmm, cb_col1, wt+wtr, wt+wtr, wtr);
                 pack_tile(wtr, cb_xmm2);
-                if (wt == 0 && wtr == 0) {
-                    DPRINT_UNPACK({
-                        DPRINT << "=== cb_xmm(0,0) ===, " << ENDL();
-                        DPRINT << TileSlice<128>(
-                                      cb_xmm,
-                                      0,
-                                      SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                                      true,
-                                      false)
-                               << ENDL();
-                    })
-                    // dprint_tensix_dest_reg(0);
-                }
+                // if (wt == 0 && wtr == 0) {
+                //     DPRINT_UNPACK({
+                //         DPRINT << "=== cb_xmm(0,0) ===, " << ENDL();
+                //         DPRINT << TileSlice<128>(
+                //                       cb_xmm,
+                //                       0,
+                //                       SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                //                       true,
+                //                       false)
+                //                << ENDL();
+                //     })
+                //     // dprint_tensix_dest_reg(0);
+                // }
             }
             cb_push_back(cb_xmm2, blk);
             REL();
@@ -179,16 +179,17 @@ void MAIN {
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 #endif
 
-        DPRINT_UNPACK({
-            DPRINT << "=== cb_xmm ===, " << ENDL();
-            DPRINT << TileSlice<128>(
-                          cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                   << ENDL();
-            DPRINT << "=== cb_xmm2 ===, " << ENDL();
-            DPRINT << TileSlice<128>(
-                          cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                   << ENDL();
-        })
+        // DPRINT_UNPACK({
+        //     DPRINT << "=== cb_xmm ===, " << ENDL();
+        //     DPRINT << TileSlice<128>(
+        //                   cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
+        //            << ENDL();
+        //     DPRINT << "=== cb_xmm2 ===, " << ENDL();
+        //     DPRINT << TileSlice<128>(
+        //                   cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+        //                   false)
+        //            << ENDL();
+        // })
 
         /* Var(x)
          * compute E[(x-E[x])^2]
@@ -314,32 +315,33 @@ void MAIN {
                 //                 1}, true, false)
                 //         << ENDL();
                 // })
-                if (wt == 8) {
-                    // 由于不知道cb_im_or_out具体应该用哪个tile，因此直接看dst寄存器的tile
-                    dprint_tensix_dest_reg(wtr);
-                }
+                // if (wt == 8) {
+                //     // 由于不知道cb_im_or_out具体应该用哪个tile，因此直接看dst寄存器的tile
+                //     dprint_tensix_dest_reg(wtr);
+                // }
             }
-            DPRINT_UNPACK({
-                DPRINT << "=== cb_xmm === wt: " << wt << " Wt: " << Wt << ENDL();
-                DPRINT
-                    << TileSlice<128>(
-                           cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-                DPRINT << "=== cb_im_or_out === wt: " << wt << " Wt: " << Wt << ENDL();
-                DPRINT << TileSlice<128>(
-                              cb_im_or_out,
-                              0,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-                // DPRINT << "=== cb_im_or_out === wt: "<< wt <<" Wt: "<< Wt << ENDL();
-                // DPRINT
-                //     << TileSlice(
-                //         cb_im_or_out, 1, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
-                //         false)
-                //     << ENDL();
-            })
+            // DPRINT_UNPACK({
+            //     DPRINT << "=== cb_xmm === wt: " << wt << " Wt: " << Wt << ENDL();
+            //     DPRINT
+            //         << TileSlice<128>(
+            //                cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            //     DPRINT << "=== cb_im_or_out === wt: " << wt << " Wt: " << Wt << ENDL();
+            //     DPRINT << TileSlice<128>(
+            //                   cb_im_or_out,
+            //                   0,
+            //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+            //                   true,
+            //                   false)
+            //            << ENDL();
+            //     // DPRINT << "=== cb_im_or_out === wt: "<< wt <<" Wt: "<< Wt << ENDL();
+            //     // DPRINT
+            //     //     << TileSlice(
+            //     //         cb_im_or_out, 1, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //     //         false)
+            //     //     << ENDL();
+            // })
 
             cb_push_back(cb_im_or_out, blk);  // if no gamma/beta are provided, this will be passed on to the writer
             REL();

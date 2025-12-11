@@ -148,8 +148,8 @@ void MAIN {
 
     DPRINT << "Compute kernel started" << ENDL();
 
-    DPRINT_UNPACK(DPRINT << "me in0_num_subblocks" << in0_num_subblocks << ENDL());
-    DPRINT_UNPACK(DPRINT << "me in1_num_subblocks" << in1_num_subblocks << ENDL());
+    DPRINT_UNPACK(DPRINT << "me in0_num_subblocks " << in0_num_subblocks << ENDL());
+    DPRINT_UNPACK(DPRINT << "me in1_num_subblocks " << in1_num_subblocks << ENDL());
     // DPRINT << "num_blocks_w_dim"<<num_blocks_w_dim<<ENDL();
 
     // mm_block_init(
@@ -225,18 +225,20 @@ void MAIN {
             }
             reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 
-            DPRINT_UNPACK({
-                DPRINT << "=== cb_xmm ===, bh:" << bh << ENDL();
-                DPRINT
-                    << TileSlice<128>(
-                           cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-                DPRINT << "=== cb_xmm2 ===, bh:" << bh << ENDL();
-                DPRINT
-                    << TileSlice<128>(
-                           cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-            })
+            // DPRINT_UNPACK({
+            //     DPRINT << "=== cb_xmm ===, bh:" << bh << ENDL();
+            //     DPRINT
+            //         << TileSlice<128>(
+            //                cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            //     DPRINT << "=== cb_xmm2 ===, bh:" << bh << ENDL();
+            //     DPRINT
+            //         << TileSlice<128>(
+            //                cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            // })
 
             // 第二步：计算E[x^2]归一化因子
             // 这个循环对 cb_xmm2 中的所有平方值进行归约求和,然后乘以 cb_scaler 得到均值,结果存入 cb_ex2。
@@ -266,13 +268,14 @@ void MAIN {
             cb_push_back(cb_ex2, 1);
             cb_wait_front(cb_ex2, 1);
 
-            DPRINT_UNPACK({
-                DPRINT << "=== cb_ex2 ===, bh:" << bh << ENDL();
-                DPRINT
-                    << TileSlice(
-                           cb_ex2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-            })
+            // DPRINT_UNPACK({
+            //     DPRINT << "=== cb_ex2 ===, bh:" << bh << ENDL();
+            //     DPRINT
+            //         << TileSlice(
+            //                cb_ex2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            // })
 
             /* Var(x) + eps
             * add epsilon E[(x-E[x])^2]+eps
@@ -292,31 +295,34 @@ void MAIN {
             REL();
             cb_pop_front(cb_ex2, 1);
 
-            DPRINT_UNPACK({
-                DPRINT << "=== cb_xmm ===, bh:" << bh << ENDL();
-                DPRINT
-                    << TileSlice(
-                           cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-                DPRINT << "=== cb_eps ===, bh:" << bh << ENDL();
-                DPRINT
-                    << TileSlice(
-                           cb_eps, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-                DPRINT << "=== cb_ex2pe ===, bh:" << bh << ENDL();
-                DPRINT
-                    << TileSlice(
-                           cb_ex2pe, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-                DPRINT << "=== cb_scaler ===, bh:" << bh << ENDL();
-                DPRINT << TileSlice(
-                              cb_scaler,
-                              0,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-            })
+            // DPRINT_UNPACK({
+            //     DPRINT << "=== cb_xmm ===, bh:" << bh << ENDL();
+            //     DPRINT
+            //         << TileSlice(
+            //                cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            //     DPRINT << "=== cb_eps ===, bh:" << bh << ENDL();
+            //     DPRINT
+            //         << TileSlice(
+            //                cb_eps, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            //     DPRINT << "=== cb_ex2pe ===, bh:" << bh << ENDL();
+            //     DPRINT
+            //         << TileSlice(
+            //                cb_ex2pe, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            //     DPRINT << "=== cb_scaler ===, bh:" << bh << ENDL();
+            //     DPRINT << TileSlice(
+            //                   cb_scaler,
+            //                   0,
+            //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+            //                   true,
+            //                   false)
+            //            << ENDL();
+            // })
 
             /* ln(x) * gamma + beta (gamma and beta are optional)
             * now xmm = (x-E[x])
@@ -402,47 +408,37 @@ void MAIN {
             // 由于不知道对应layernorm.cpp中的cb_im_or_out哪个，所以直接与dst寄存器进行比较(dprint_tensix_dest_reg)
             // TileSlice的第二个参数代表第几个tile，如果是8、9、10、11，则对应着layernorm.cpp中的if (wt == 8)
             // {dprint_tensix_dest_reg(wtr);}，即打印wt从8开始的几个tile
-            DPRINT_UNPACK({
-                DPRINT << "=== cb_im_or_out ===, bh:" << bh << ENDL();
-                DPRINT << TileSlice<128>(
-                              cb_im_or_out,
-                              8,
-                              SliceRange{.h0 = 4, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 16, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-                DPRINT << TileSlice<128>(
-                              cb_im_or_out,
-                              9,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-                DPRINT << TileSlice<128>(
-                              cb_im_or_out,
-                              10,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-                DPRINT << TileSlice<128>(
-                              cb_im_or_out,
-                              11,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-
-            })
             // DPRINT_UNPACK({
-            //     DPRINT << "=== in1_cb_id ===, bh:" << bh << ENDL();
-            //     DPRINT << TileSlice(
-            //                   in1_cb_id,
+            //     DPRINT << "=== cb_im_or_out ===, bh:" << bh << ENDL();
+            //     DPRINT << TileSlice<128>(
+            //                   cb_im_or_out,
             //                   0,
             //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
             //                   true,
             //                   false)
             //            << ENDL();
+            //     DPRINT << TileSlice<128>(
+            //                   cb_im_or_out,
+            //                   1,
+            //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+            //                   true,
+            //                   false)
+            //            << ENDL();
+            //     DPRINT << TileSlice<128>(
+            //                   cb_im_or_out,
+            //                   2,
+            //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+            //                   true,
+            //                   false)
+            //            << ENDL();
+            //     DPRINT << TileSlice<128>(
+            //                   cb_im_or_out,
+            //                   3,
+            //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+            //                   true,
+            //                   false)
+            //            << ENDL();
+
             // })
 
             // 现在的输入是cb_norm_output，一整行已经在L1中。等待的是整个K(in0_block_w * num_blocks_inner_dim)
@@ -466,15 +462,6 @@ void MAIN {
                     // DPRINT_UNPACK(DPRINT << "cb_wait_front(in0_cb_id, in0_block_num_tiles);" << ENDL());
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
                     // DPRINT_UNPACK(DPRINT << "cb_wait_front(in1_cb_id, in1_block_num_tiles);" << ENDL());
-
-                    // DPRINT_UNPACK({
-                    //     DPRINT << "m=== cb_im_or_out ===, bh:" << bh <<" block: "<< block << ENDL();
-                    //     DPRINT << TileSlice(
-                    //                 cb_im_or_out, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws =
-                    //                 1}, true, false)
-                    //         << ENDL();
-                    //     DPRINT << "matmul_in0_index: " << matmul_in0_index << ENDL();
-                    // })
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {// 1（与K无关）现在只有1行，因此固定为1，该循环可以去掉
@@ -506,7 +493,29 @@ void MAIN {
                             // in0_index和matmul_in0_index的转换有问题，现在过了前8次就出事。
                             uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                             uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                            matmul_in0_index = matmul_in0_index % 64;
+                            uint32_t matmul_in0_index_copy = matmul_in0_index / 8;  // 8 应该是循环的次数
+                            if (block == 1 && in0_subblock == 0 && in1_subblock == 0) {
+                                DPRINT_UNPACK({
+                                    DPRINT << "matmul_in0_index: " << matmul_in0_index_copy << ENDL();
+                                    DPRINT << "my === cb_im_or_out ===, bh:" << bh << ENDL();
+                                    DPRINT << TileSlice(
+                                                  cb_im_or_out,
+                                                  matmul_in0_index_copy,
+                                                  SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                                                  true,
+                                                  false)
+                                           << ENDL();
+                                    // DPRINT << "my === in1_cb_id ===, bh:" << bh << ENDL();
+                                    // DPRINT << TileSlice(
+                                    //             in1_cb_id,
+                                    //             0,
+                                    //             SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                                    //             true,
+                                    //             false)
+                                    //     << ENDL();
+                                })
+                            }
+
                             // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
                             for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
                                 // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
@@ -520,12 +529,12 @@ void MAIN {
                                     in1_cb_id,
                                     // TODO:in0_index应该改变，因为cb_im_or_out相比于in0_cb_id处在循环的更外层
                                     // in0_index,   //指定矩阵A的当前列（K维度位置）
-                                    matmul_in0_index,
-                                    in1_index,  //指定矩阵B的当前行（K维度位置）
-                                    dst_index,//subblock的意义就在于dst，dst_index就是一个输出subblock在dst寄存器的索引
+                                    matmul_in0_index_copy,
+                                    in1_index,  // 指定矩阵B的当前行（K维度位置）
+                                    dst_index,  // subblock的意义就在于dst，dst_index就是一个输出subblock在dst寄存器的索引
                                     in1_transpose_tile,
-                                    out_subblock_w, //matmul_block处理[out_subblock_h*out_subblock_w]的外积，因此in1_index不用照顾到out_subblock_w参数，matmul_block内部会处理out_subblock_h参数
-                                    out_subblock_h, //matmul_block处理[out_subblock_h*out_subblock_w]的外积，因此in0_index不用照顾到out_subblock_h参数，matmul_block内部会处理out_subblock_w参数
+                                    out_subblock_w,  // matmul_block处理[out_subblock_h*out_subblock_w]的外积，因此in1_index不用照顾到out_subblock_w参数，matmul_block内部会处理out_subblock_h参数
+                                    out_subblock_h,  // matmul_block处理[out_subblock_h*out_subblock_w]的外积，因此in0_index不用照顾到out_subblock_h参数，matmul_block内部会处理out_subblock_w参数
                                     in0_block_w);
                                 // DPRINT_MATH(DPRINT << "matmul_block();"<< "in1_subblock:" << in1_subblock <<"
                                 // out_subblock_num_tiles:" << out_subblock_num_tiles << ENDL()); in0_index++; // stride
@@ -533,6 +542,11 @@ void MAIN {
                                 matmul_in0_index++;
                                 in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
                                                            // (should be called in1_block_w)
+                            }
+
+                            if (block == 1 && in0_subblock == 0 && in1_subblock == 0) {
+                                DPRINT_MATH({ DPRINT << "dst_index:" << dst_index << ENDL(); })
+                                dprint_tensix_dest_reg(dst_index);
                             }
 
 #endif  // SKIP_COMPUTE
@@ -562,13 +576,16 @@ void MAIN {
                                 tile_regs_release();
                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
 
-                                // DPRINT_UNPACK({
-                                //     DPRINT << "m=== mm_out_cb_id ===, bh:" << bh <<" block: "<< block << ENDL();
-                                //     DPRINT << TileSlice(
-                                //                 mm_out_cb_id, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1
-                                //                 = 32, .ws = 1}, true, false)
-                                //         << ENDL();
-                                // })
+                                DPRINT_UNPACK({
+                                    DPRINT << "my === mm_out_cb_id ===, bh:" << bh << " block: " << block << ENDL();
+                                    DPRINT << TileSlice(
+                                                  mm_out_cb_id,
+                                                  0,
+                                                  SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                                                  true,
+                                                  false)
+                                           << ENDL();
+                                })
 
                             } else {
                                 tile_regs_commit();
@@ -613,13 +630,17 @@ void MAIN {
                                 // DPRINT_PACK(DPRINT << "cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);" <<
                                 // "in1_subblock:" << in1_subblock << ENDL());
 
-                                // DPRINT_UNPACK({
-                                //     DPRINT << "m=== mm_partials_cb_id ===, bh:" << bh <<" block: "<< block << ENDL();
-                                //     DPRINT << TileSlice(
-                                //                 mm_partials_cb_id, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0,
-                                //                 .w1 = 32, .ws = 1}, true, false)
-                                //         << ENDL();
-                                // })
+                                DPRINT_UNPACK({
+                                    DPRINT << "my === mm_partials_cb_id ===, bh:" << bh << " block: " << block
+                                           << ENDL();
+                                    DPRINT << TileSlice(
+                                                  mm_partials_cb_id,
+                                                  0,
+                                                  SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                                                  true,
+                                                  false)
+                                           << ENDL();
+                                })
                             }
 
                             in1_index_subblock_offset += out_subblock_w;
