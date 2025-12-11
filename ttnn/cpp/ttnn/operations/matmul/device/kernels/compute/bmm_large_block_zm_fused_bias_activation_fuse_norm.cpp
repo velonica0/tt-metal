@@ -493,28 +493,30 @@ void MAIN {
                             // in0_index和matmul_in0_index的转换有问题，现在过了前8次就出事。
                             uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                             uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                            uint32_t matmul_in0_index_copy = matmul_in0_index / 8;  // 8 应该是循环的次数
-                            if (block == 1 && in0_subblock == 0 && in1_subblock == 0) {
-                                DPRINT_UNPACK({
-                                    DPRINT << "matmul_in0_index: " << matmul_in0_index_copy << ENDL();
-                                    DPRINT << "my === cb_im_or_out ===, bh:" << bh << ENDL();
-                                    DPRINT << TileSlice(
-                                                  cb_im_or_out,
-                                                  matmul_in0_index_copy,
-                                                  SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                                                  true,
-                                                  false)
-                                           << ENDL();
-                                    // DPRINT << "my === in1_cb_id ===, bh:" << bh << ENDL();
-                                    // DPRINT << TileSlice(
-                                    //             in1_cb_id,
-                                    //             0,
-                                    //             SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                                    //             true,
-                                    //             false)
-                                    //     << ENDL();
-                                })
-                            }
+                            // 对于不同的in1_num_subblock，应该使用相同的in0_index
+                            uint32_t matmul_in0_index_copy = matmul_in0_index / (in1_num_subblocks);
+                            // if (block == 1 && in0_subblock == 0 && in1_subblock == 0) {
+                            //     DPRINT_UNPACK({
+                            //         DPRINT << "matmul_in0_index: " << matmul_in0_index_copy << ENDL();
+                            //         DPRINT << "my === cb_im_or_out ===, bh:" << bh << ENDL();
+                            //         DPRINT << TileSlice(
+                            //                       cb_im_or_out,
+                            //                       matmul_in0_index_copy,
+                            //                       SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                            //                       true,
+                            //                       false)
+                            //                << ENDL();
+                            //         // DPRINT << "my === in1_cb_id ===, bh:" << bh << ENDL();
+                            //         // DPRINT << TileSlice(
+                            //         //             in1_cb_id,
+                            //         //             0,
+                            //         //             SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws =
+                            //         1},
+                            //         //             true,
+                            //         //             false)
+                            //         //     << ENDL();
+                            //     })
+                            // }
 
                             // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
                             for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
@@ -544,10 +546,10 @@ void MAIN {
                                                            // (should be called in1_block_w)
                             }
 
-                            if (block == 1 && in0_subblock == 0 && in1_subblock == 0) {
-                                DPRINT_MATH({ DPRINT << "dst_index:" << dst_index << ENDL(); })
-                                dprint_tensix_dest_reg(dst_index);
-                            }
+                            // if (block == 1 && in0_subblock == 0 && in1_subblock == 0) {
+                            //     DPRINT_MATH({ DPRINT << "dst_index:" << dst_index << ENDL(); })
+                            //     dprint_tensix_dest_reg(dst_index);
+                            // }
 
 #endif  // SKIP_COMPUTE
 
@@ -576,16 +578,16 @@ void MAIN {
                                 tile_regs_release();
                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
 
-                                DPRINT_UNPACK({
-                                    DPRINT << "my === mm_out_cb_id ===, bh:" << bh << " block: " << block << ENDL();
-                                    DPRINT << TileSlice(
-                                                  mm_out_cb_id,
-                                                  0,
-                                                  SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                                                  true,
-                                                  false)
-                                           << ENDL();
-                                })
+                                // DPRINT_UNPACK({
+                                //     DPRINT << "my === mm_out_cb_id ===, bh:" << bh << " block: " << block << ENDL();
+                                //     DPRINT << TileSlice(
+                                //                   mm_out_cb_id,
+                                //                   0,
+                                //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                                //                   true,
+                                //                   false)
+                                //            << ENDL();
+                                // })
 
                             } else {
                                 tile_regs_commit();
@@ -630,17 +632,17 @@ void MAIN {
                                 // DPRINT_PACK(DPRINT << "cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);" <<
                                 // "in1_subblock:" << in1_subblock << ENDL());
 
-                                DPRINT_UNPACK({
-                                    DPRINT << "my === mm_partials_cb_id ===, bh:" << bh << " block: " << block
-                                           << ENDL();
-                                    DPRINT << TileSlice(
-                                                  mm_partials_cb_id,
-                                                  0,
-                                                  SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                                                  true,
-                                                  false)
-                                           << ENDL();
-                                })
+                                // DPRINT_UNPACK({
+                                //     DPRINT << "my === mm_partials_cb_id ===, bh:" << bh << " block: " << block
+                                //            << ENDL();
+                                //     DPRINT << TileSlice(
+                                //                   mm_partials_cb_id,
+                                //                   0,
+                                //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                                //                   true,
+                                //                   false)
+                                //            << ENDL();
+                                // })
                             }
 
                             in1_index_subblock_offset += out_subblock_w;

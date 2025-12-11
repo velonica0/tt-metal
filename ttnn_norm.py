@@ -26,38 +26,12 @@ device = ttnn.open_device(device_id=device_id, dispatch_core_config=ttnn.device.
 # 32*8是一个core应该处理的量
 # 如果大于32*8*8，应该效仿attention.py，将torch_input_tensor_a reshape到batch维度
 # TODO: K值有问题，最后再改吧
-# torch_input_tensor_a = torch.rand(32*8*2, 64*8*4, dtype=torch.float32)
 
 # 定义张量尺寸
-R = 32 * 8 * 8  # 行数 = 512
-C = 32 * 8 * 2  # 列数 = 4096
-N = C  # 循环的模数 (0到7)
-# 1. 创建从 0 到 C-1 的序列 (形状: [2048])
-# 例如：[0, 1, 2, ..., 2047]
-sequence = torch.arange(C)
-# 2. 对序列进行取模操作 (形状: [2048])
-# 结果：[0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7, ...]
-row_pattern = (sequence % N + 1) * 0.001
-# torch_input_tensor_a = row_pattern.unsqueeze(0).expand(R, C).to(torch.float32)
-# torch_input_tensor_a = torch.rand(R, C, dtype=torch.float16)
+R = 32 * 8 * 8
+C = 32 * 8 * 8 * 2
 
-# 4. 创建一个形状为 [R, C] 的全零张量，用于存放结果
-torch_input_tensor_a = torch.zeros(R, C, dtype=torch.float16)
-
-# 5. 设置第一行 (第 0 行) 的值为 row_pattern_base
-torch_input_tensor_a[0, :] = row_pattern
-
-# 6. 循环计算后续每一行：当前行 = 上一行 * 2
-# 注意：PyTorch 的乘法是元素级的
-for i in range(1, R):
-    # 计算 i 行为 i-1 行的 2 倍
-    # 这一步是您要求实现的“每一行都比上一行*2”的逻辑
-    torch_input_tensor_a[i, :] = torch_input_tensor_a[i - 1, :] * 1.0
-
-# print("torch_input_tensor_a")
-# print(torch_input_tensor_a)
-
-torch_input_tensor_a = torch.rand(R, C, dtype=torch.float16)
+torch_input_tensor_a = torch.rand(2, R // 2, C, dtype=torch.float16)
 input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 rmsnorm_torch = rmsnorm_no_weight(torch_input_tensor_a)
 
@@ -77,7 +51,6 @@ input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layo
 
 output_tensor = ttnn.exp(input_tensor_b)
 
-
 program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=(8, 8),
     in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
@@ -91,6 +64,7 @@ program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     fuse_batch=False,
 )
 
+# linear_norm 显示指定了out_block_h=1，因此out_subblock_h也只能=1.
 program_config_fusenorm = ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm(
     compute_with_storage_grid_size=(8, 8),
     in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
@@ -201,4 +175,12 @@ def comp_pcc(golden, calculated, pcc=0.99):
 # 计算并打印结果
 passing, pcc_message = comp_pcc(torch_matmul_output_tensor, torch_linear_norm_output_tensor)
 
-print(f"PCC: {pcc_message}")
+print(f"me and torch PCC: {pcc_message}")
+
+passing, pcc_message = comp_pcc(torch_linear_output_tensor, torch_linear_norm_output_tensor)
+
+print(f"me and tt PCC: {pcc_message}")
+
+passing, pcc_message = comp_pcc(torch_linear_output_tensor, torch_matmul_output_tensor)
+
+print(f"tt and torch PCC: {pcc_message}")
