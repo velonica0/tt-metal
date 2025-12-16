@@ -4,7 +4,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.attention import Attention as DefaultAttention
+from models.tt_transformers.tt.attention_norm import Attention as DefaultAttentionNorm
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
@@ -47,8 +47,8 @@ class TransformerBlock(LightweightModule):
         self.is_mixture_of_experts = False
         self.layer_num = layer_num
 
-        ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
-
+        # 本代码只使用融合算子
+        ActualAttentionClass = attention_class if attention_class is not None else DefaultAttentionNorm
         self.attention = ActualAttentionClass(
             mesh_device=mesh_device,
             tt_ccl=self.tt_ccl,
@@ -60,6 +60,9 @@ class TransformerBlock(LightweightModule):
             configuration=args,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
+            state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+            weight_key=["attention_norm", "ffn_norm"],  # 目前只在两个地方用到了融合算子
+            dim=args.dim,
         )
 
         if getattr(self.args, "is_mixture_of_experts", False):
@@ -93,28 +96,28 @@ class TransformerBlock(LightweightModule):
                 dtype=dtype,
                 model_config=self.model_config,
             )
-
-        self.attention_norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                eps=args.norm_eps,
-                state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", layer_num),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="attention_norm",
-                is_distributed=self.args.is_distributed_norm,
-                add_unit_offset=self.args.rms_norm_add_unit_offset,
-                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
-                ccl_topology=self.args.ccl_topology(),
-                tt_ccl=self.tt_ccl,
-            ),
-            args,
-            tt_ccl=self.tt_ccl,
-            TG=args.is_galaxy,
-        )
+        # 融合算子就不在这加载了
+        # self.attention_norm = DistributedNorm(
+        #     RMSNorm(
+        #         device=mesh_device,
+        #         dim=args.dim,
+        #         eps=args.norm_eps,
+        #         state_dict=state_dict,
+        #         state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+        #         weight_cache_path=None if args.dummy_weights else weight_cache_path,
+        #         weight_dtype=ttnn.bfloat16,
+        #         weight_key="attention_norm",
+        #         is_distributed=self.args.is_distributed_norm,
+        #         add_unit_offset=self.args.rms_norm_add_unit_offset,
+        #         sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
+        #         sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+        #         ccl_topology=self.args.ccl_topology(),
+        #         tt_ccl=self.tt_ccl,
+        #     ),
+        #     args,
+        #     tt_ccl=self.tt_ccl,
+        #     TG=args.is_galaxy,
+        # )
         self.ff_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -215,15 +218,23 @@ class TransformerBlock(LightweightModule):
             rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
         )
 
-        print("x")
-        print(x)
-        # Norms take fractured inputs and output replicated across devices
-        attn_in = self.attention_norm(x, mode)
-        print("attn_in")
-        print(attn_in)
-        # Attention takes replicated inputs and produces fractured outputs
+        # # Norms take fractured inputs and output replicated across devices
+        # attn_in = self.attention_norm(x, mode)
+        # # Attention takes replicated inputs and produces fractured outputs
+        # attn_out = self.attention.forward(
+        #     attn_in,
+        #     current_pos,
+        #     rot_mats,
+        #     user_id,
+        #     mode,
+        #     page_table=page_table,
+        #     chunk_page_table=chunk_page_table,
+        #     chunk_start_idx=chunk_start_idx,
+        #     kv_cache=kv_cache,
+        #     attn_mask=attn_mask,
+        # )
         attn_out = self.attention.forward(
-            attn_in,
+            x,
             current_pos,
             rot_mats,
             user_id,
@@ -233,6 +244,7 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
             attn_mask=attn_mask,
+            weight_name_norm="attention_norm",
         )
 
         if self.pre_ff_norm is None:
@@ -299,6 +311,7 @@ class TransformerBlock(LightweightModule):
 
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
 
+        print("out = ttnn.add(")
         out = ttnn.add(
             residual,
             hidden_states,
@@ -307,5 +320,6 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
+        print("out = ttnn.add( after")
 
         return out  # fractured across devices

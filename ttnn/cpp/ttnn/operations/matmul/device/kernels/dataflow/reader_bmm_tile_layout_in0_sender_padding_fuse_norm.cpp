@@ -232,9 +232,10 @@ for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {      // pre_core_M（这就
 
             // Operand 0
             // Common for sharded and interleaved paths
+            // DPRINT << "cb_reserve_back(cb_id_in0, in0_block_num_tiles);"  << ENDL();
+            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
             // DPRINT << "cb_reserve_back(cb_id_in0, in0_block_num_tiles);" << " block:" << block <<" bh:" << bh <<
             // ENDL();
-            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
             uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
 
@@ -307,7 +308,7 @@ for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {      // pre_core_M（这就
                         // DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles);" << " block:" << block <<" bh:" <<
                         // bh << ENDL();
                         cb_push_back(cb_id_in0, in0_block_num_tiles);
-                        // DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles); END END END"  << ENDL();
+                        DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles); END END END" << ENDL();
         }
     }
                 in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;

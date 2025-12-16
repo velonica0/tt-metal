@@ -13,9 +13,9 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import preco
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
-from models.tt_transformers.tt.decoder import TransformerBlock
 
-# from models.tt_transformers.tt.decoder_norm import TransformerBlock
+# from models.tt_transformers.tt.decoder import TransformerBlock
+from models.tt_transformers.tt.decoder_norm import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import get_rot_mats
 

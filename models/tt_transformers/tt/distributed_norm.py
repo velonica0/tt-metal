@@ -73,6 +73,8 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+            # 由于n300有两个芯片，每个芯片只有一半的数据（输入），所以需要all_gather_async
+            # 需要先收集所有输入数据，然后在一个设备上执行归一化
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
@@ -93,6 +95,8 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode):
+            # 超过了一个芯片所能计算的上限
+            # 各设备先执行本地归一化，然后收集结果
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,

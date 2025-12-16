@@ -807,7 +807,7 @@ MatmulProgramConfig create_matmul_program_config(
         k_tiles_per_core,
         estimate_interm_tile_size(compute_kernel_config, output_dtype),
         /*adjust_in0_block_w=*/false);
-    uint32_t out_block_h = mutlti_dim_per_core_factor[0];   
+    uint32_t out_block_h = mutlti_dim_per_core_factor[0];
     uint32_t out_block_w = mutlti_dim_per_core_factor[1];
 
     auto matmul_params = get_subblock_sizes(out_block_h, out_block_w, fp32_dest_acc_en);
@@ -1458,7 +1458,7 @@ Tensor matmul(
     const struct Matmul& parameters,
     const std::optional<Tensor>& optional_output_tensor) {
     log_info(tt::LogOp, "matmul_op.cpp: Tensor matmul");
-    
+
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     if (bias.has_value()) {
         optional_input_tensors.push_back(bias);
@@ -1799,7 +1799,8 @@ void Matmul::validate(
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig> ||
-                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig> ||
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm>) {
                 TT_FATAL(program_config.in0_block_w != 0, "in0_block_w is 0, which is not valid");
                 TT_FATAL(program_config.out_subblock_h != 0, "out_subblock_h is 0, which is not valid");
                 TT_FATAL(program_config.out_subblock_w != 0, "out_subblock_w is 0, which is not valid");
@@ -2084,7 +2085,9 @@ void Matmul::validate(
                     input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
                     "Input B memory layout must be WIDTH_SHARDED, got: {}",
                     input_tensor_b.memory_config().memory_layout());
-            } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
+            } else if constexpr (
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm>) {
                 check_tensor_in_grid(input_tensor_a, program_config.compute_with_storage_grid_size);
                 check_tensor_in_grid(input_tensor_b, program_config.compute_with_storage_grid_size);
                 TT_FATAL(
@@ -2367,7 +2370,8 @@ void Matmul::validate(
             if constexpr (
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig> ||
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig> ||
-                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig> ||
+                std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm>) {
                 TT_FATAL(
                     (input_tensor_a.padded_shape()[-1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
                     "Kt must be divisible by in0_block_w");
@@ -2503,7 +2507,9 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(output_dtype.value(), PageConfig(output_layout, output_tile), mem_config))};
-                } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
+                } else if constexpr (
+                    std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig> ||
+                    std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm>) {
                     uint32_t M =
                         input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
                     uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];

@@ -1,6 +1,7 @@
 import torch
 import ttnn
 import numpy as np
+import math
 
 
 def rmsnorm_no_weight(X, eps=1e-6):
@@ -20,7 +21,23 @@ def rmsnorm_no_weight(X, eps=1e-6):
     return Y
 
 
-device_id = 0
+def create_dram_sharded_mem_config(k, n):
+    dram_weight_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(12 - 1, 0),
+            )
+        }
+    )
+    """Create DRAM-sharded memory config for width-sharded tensors"""
+    dram_cores = 12  # WH has 12 dram cores, P150 has 8, P100 has 7
+    padded_size = math.ceil(n / (32 * dram_cores)) * (32 * dram_cores)
+    shard_spec = ttnn.ShardSpec(dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+
+device_id = 1
 device = ttnn.open_device(device_id=device_id, dispatch_core_config=ttnn.device.DispatchCoreConfig())
 
 # 32*8是一个core应该处理的量
@@ -28,36 +45,66 @@ device = ttnn.open_device(device_id=device_id, dispatch_core_config=ttnn.device.
 # TODO: K值有问题，最后再改吧
 
 # 定义张量尺寸
-R = 32 * 8 * 8
-C = 32 * 8 * 8 * 2
+# [128*896*1152]是qwen2.5-0.5B的参数
+M = 128
+K = 896
+N = 1152
 
-torch_input_tensor_a = torch.rand(2, R // 2, C, dtype=torch.float16)
-input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+# torch_input_tensor_a = torch.rand(1, 1, M, K, dtype=torch.float16)
+# torch_input_tensor_a = torch_input_tensor_a * 2.0 - 1.0
+
+# --- 周期定义 ---
+MIN_VAL = -2.0
+MAX_VAL = 2.0
+STEP = 0.1  # 步长，决定周期的精细程度
+
+batch_size = 1
+# ---
+num_steps = int((MAX_VAL - MIN_VAL) / STEP) + 1
+period_tensor = torch.linspace(start=MIN_VAL, end=MAX_VAL, steps=num_steps, dtype=torch.float16)
+total_elements = batch_size * M * K
+period_length = period_tensor.numel()
+num_repeats = (total_elements + period_length - 1) // period_length  # 向上取整
+torch_input_tensor_a = period_tensor.repeat(num_repeats)[:total_elements]
+torch_input_tensor_a = torch_input_tensor_a.view(batch_size, M, K)
+
+input_tensor_a = ttnn.from_torch(
+    torch_input_tensor_a,
+    dtype=ttnn.bfloat16,
+    layout=ttnn.TILE_LAYOUT,
+    device=device,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+)
 rmsnorm_torch = rmsnorm_no_weight(torch_input_tensor_a)
+print("input_tensor_a")
+print(input_tensor_a)
 
 
 rmsnorm = ttnn.rms_norm(input_tensor_a, epsilon=1e-5)
 torch_rmsnorm_output_tensor = ttnn.to_torch(rmsnorm)
 torch.set_printoptions(threshold=100000)
 print("torch_rmsnorm_output_tensor[0]")
-print(torch_rmsnorm_output_tensor[0])
+print(torch_rmsnorm_output_tensor[0][0])
 
 
 # torch_output_tensor = ttnn.to_torch(output_tensor)
 
-torch_input_tensor_b = torch.rand(C, R, dtype=torch.float16)
-# torch_input_tensor_b = torch.ones(C, R, dtype=torch.float16)
-input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+torch_input_tensor_b = torch.rand(1, 1, K, N, dtype=torch.float16)
+wqkv_mem_config = create_dram_sharded_mem_config(K, N // 1)
+input_tensor_b = ttnn.from_torch(
+    torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=wqkv_mem_config
+)
 
-output_tensor = ttnn.exp(input_tensor_b)
+# output_tensor = ttnn.exp(input_tensor_a)
 
 program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=(8, 8),
     in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
     out_subblock_h=1,  # Must be divisible by per_core_M
     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-    per_core_M=8,
-    per_core_N=8,
+    per_core_M=1,
+    per_core_N=5,
     out_block_h=1,
     transpose_mcast=False,
     fused_activation=None,
@@ -70,8 +117,8 @@ program_config_fusenorm = ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNor
     in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
     out_subblock_h=1,  # Must be divisible by per_core_M
     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-    per_core_M=8,
-    per_core_N=8,
+    per_core_M=1,
+    per_core_N=5,
     out_block_h=1,
     transpose_mcast=False,
     fused_activation=None,
@@ -79,8 +126,18 @@ program_config_fusenorm = ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNor
 )
 
 print("program_config_fusenorm=ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm")
+compute_kernel_config = ttnn.init_device_compute_kernel_config(
+    device.arch(),
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,  # 变成true会出问题
+    packer_l1_acc=True,
+)
 
-liner_output_tensor = ttnn.linear(rmsnorm, input_tensor_b, program_config=program_config)
+liner_output_tensor = ttnn.linear(
+    rmsnorm, input_tensor_b, program_config=program_config, compute_kernel_config=compute_kernel_config
+)
+print(liner_output_tensor)
 torch_linear_output_tensor = ttnn.to_torch(liner_output_tensor)
 # print("torch_linear_output_tensor")
 # print(torch_linear_output_tensor[0])
@@ -88,26 +145,26 @@ torch_linear_output_tensor = ttnn.to_torch(liner_output_tensor)
 
 torch_matmul_output_tensor = torch.matmul(rmsnorm_torch, torch_input_tensor_b)
 
-output_tensor = ttnn.exp(input_tensor_b)
-compute_kernel_config = ttnn.init_device_compute_kernel_config(
-    device.arch(),
-    math_fidelity=ttnn.MathFidelity.HiFi4,
-    math_approx_mode=True,
-    fp32_dest_acc_en=False,
-    packer_l1_acc=True,
-)
+# output_tensor = ttnn.exp(input_tensor_b)
+# print(input_tensor_a)
+# print(input_tensor_b)
+# print(f"Memory config: {ttnn.get_memory_config(input_tensor_a)}")
+# print(f"Memory config: {ttnn.get_memory_config(input_tensor_b)}")
+
+
 linear_norm_output_tensor = ttnn.linear_norm(
     input_tensor_a,
     input_tensor_b,
     gamma=None,
     epsilon=1e-5,
     program_config=program_config_fusenorm,
-    compute_kernel_config=compute_kernel_config,
+    # compute_kernel_config=compute_kernel_config,
 )
+print(linear_norm_output_tensor)
 torch_linear_norm_output_tensor = ttnn.to_torch(linear_norm_output_tensor)
 
 # torch.set_printoptions(threshold=10000)
-print(torch_matmul_output_tensor[0])
+# print(torch_matmul_output_tensor[0])
 # print(torch_linear_norm_output_tensor[0])
 
 

@@ -12,6 +12,9 @@ from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
+TILE = 32
+SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
+
 
 class Attention(LightweightModule):
     def __init__(
@@ -24,6 +27,19 @@ class Attention(LightweightModule):
         dtype,
         transformation_mats,
         configuration,
+        # RMSnorm增加的参数
+        dim,
+        weight_key,
+        state_dict_prefix,
+        weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        weight_dtype=ttnn.bfloat16,
+        is_distributed=None,
+        eps: float = 1e-05,
+        add_unit_offset=False,
+        sharded_program_config=None,
+        sharded_output_config=None,
+        output_mem_config=None,
+        ccl_topology=ttnn.Topology.Ring,
         paged_attention_config=None,
         use_paged_kv_cache=False,
     ):
@@ -230,7 +246,6 @@ class Attention(LightweightModule):
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
-        # wqkv每个芯片在-1维度只有一半，因此每个芯片的计算量也减少一半
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.wqkv_dtype,
@@ -324,6 +339,77 @@ class Attention(LightweightModule):
             self.scale = configuration.query_pre_attn_scalar**-0.5
         else:
             self.scale = self.head_dim**-0.5
+
+        # norm 新增的内容
+        self.eps = eps
+        self.is_distributed = is_distributed
+        self.ccl_topology = ccl_topology
+        self.tt_ccl = tt_ccl
+
+        # 支持 weight_key 为列表：构建以每个 key 为键的字典
+        weight_keys = weight_key if isinstance(weight_key, (list, tuple)) else [weight_key]
+
+        # Compatibility with models that don't use mesh devices (e.g. single-chip Mistral-7b)
+        is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
+
+        self.weight = {}
+        if self.is_distributed:
+            self.weight_distributed = {}
+
+        for wk in weight_keys:
+            if state_dict_prefix:
+                weight_name = f"{state_dict_prefix}{wk}.weight"
+            else:
+                if layer_num is None:
+                    weight_name = f"{wk}.weight"
+                else:
+                    weight_name = f"layers.{layer_num}.{wk}.weight"
+
+            torch_weight = (
+                state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
+            )
+
+            # Add offset before caching
+            if add_unit_offset:
+                torch_weight = torch_weight + 1.0
+
+            self.weight[wk] = ttnn.as_tensor(
+                torch_weight,
+                device=mesh_device,
+                dtype=weight_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=weight_memory_config,
+                cache_file_name=None if weight_cache_path is None else weight_cache_path / weight_name,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None,
+            )
+
+            if self.is_distributed:
+                self.weight_distributed[wk] = ttnn.as_tensor(
+                    torch_weight,
+                    device=mesh_device,
+                    dtype=weight_dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=weight_memory_config,
+                    cache_file_name=(
+                        None if weight_cache_path is None else weight_cache_path / (weight_name + "_distributed")
+                    ),
+                    mesh_mapper=(
+                        ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=list(mesh_device.shape))
+                        if is_mesh_device
+                        else None
+                    ),
+                )
+
+        self.sharded_output_config = sharded_output_config
+        self.sharded_program_config = sharded_program_config
+        self.output_mem_config = output_mem_config
+
+        self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -668,6 +754,7 @@ class Attention(LightweightModule):
         self,
         x_11SH,
         rot_mats,
+        weight_name_norm,  # 融合算子有两种，该变量决定执行哪种
         user_id: int = 0,
         page_table=None,
         chunk_page_table=None,
@@ -688,17 +775,45 @@ class Attention(LightweightModule):
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
         # MatmulMultiCoreReuseMultiCastProgramConfig
+        # xqkv_fused = ttnn.linear(
+        #     x_11SH,
+        #     self.wqkv,
+        #     dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
+        #     program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+        # )
+
+        print(x_11SH)
+        print(self.wqkv)
+        print(f"Memory config: {ttnn.get_memory_config(x_11SH)}")
+        print(f"Memory config: {ttnn.get_memory_config(self.wqkv)}")
+        program_config_fusenorm = ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=1,
+            per_core_N=5,
+            out_block_h=1,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
         print("x_11SH")
         print(x_11SH)
         print("self.wqkv")
         print(self.wqkv)
-        xqkv_fused = ttnn.linear(
+        xqkv_fused = ttnn.linear_norm(
             x_11SH,
             self.wqkv,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # gamma=self.weight[weight_name_norm],
+            gamma=None,
+            epsilon=self.eps,
+            # dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
-            program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+            program_config=program_config_fusenorm,
         )
         print("xqkv_fused")
         print(xqkv_fused)
@@ -928,11 +1043,13 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
         attn_mask=None,
+        weight_name_norm=None,
     ):
         if mode == "prefill":
             return self.forward_prefill(
                 x,
                 rot_mats,
+                weight_name_norm,
                 user_id,
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,

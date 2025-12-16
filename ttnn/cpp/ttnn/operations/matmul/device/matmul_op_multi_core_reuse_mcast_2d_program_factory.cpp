@@ -560,8 +560,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
     if (in0_height_sharded) {
         mm_kernel_in0_sender_interleaved_defines["IN0_SHARDED"] = "1";
+        log_info(tt::LogOp, "mm_kernel_in0_sender_interleaved_defines[IN0_SHARDED] = 1;");
     }
-    log_info(tt::LogOp, "velonica::::::::::SKIP_MCAST");
     if (in1_receiver.num_cores() == 0) {
         mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
          log_info(tt::LogOp, "mm_kernel_in1_sender_writer_defines[SKIP_MCAST] = 1;");
@@ -569,8 +569,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     if (in1_is_sharded) {
         if (in1_is_dram) {
             mm_kernel_in1_sender_writer_defines["IN1_DRAM_SHARDED"] = "1";
+            log_info(tt::LogOp, "mm_kernel_in1_sender_writer_defines[IN1_DRAM_SHARDED] = 1;");
         } else {
             mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
+            log_info(tt::LogOp, "mm_kernel_in1_sender_writer_defines[IN1_SHARDED] = 1;");
         }
     }
 
@@ -608,10 +610,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
         if (in0_needs_intermediate_cb_read) {
             mm_kernel_in0_sender_interleaved_defines["INTERMEDIATE_CB_READ"] = "1";
+            log_info(tt::LogOp, "mm_kernel_in0_sender_interleaved_defines[INTERMEDIATE_CB_READ] = 1;");
         }
         in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
         if (in1_needs_intermediate_cb_read) {
             mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
+            log_info(tt::LogOp, "mm_kernel_in1_sender_writer_defines[INTERMEDIATE_CB_READ] = 1;");
         }
     }
 

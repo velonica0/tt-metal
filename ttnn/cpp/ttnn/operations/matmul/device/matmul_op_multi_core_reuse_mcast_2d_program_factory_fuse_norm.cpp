@@ -791,6 +791,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
 
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
+    // 使用的
     std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks
@@ -1711,6 +1712,14 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
         std::swap(num_blocks_x, num_blocks_y);
     }
 
+    log_info(tt::LogOp, "Nt: {}", Nt);
+    log_info(
+        tt::LogOp,
+        "per_core_N:{}, num_blocks_x: {}, num_cores_x: {},num_cores_y: {}",
+        per_core_N,
+        num_blocks_x,
+        num_cores_x,
+        num_cores_y);
     // TODO: Max used grid can actually exceed mcast receiver grid if in0 is sharded
     // TODO: Move these validates to op validate and properly check for this
     TT_FATAL(
