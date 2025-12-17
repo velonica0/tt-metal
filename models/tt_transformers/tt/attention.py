@@ -697,7 +697,7 @@ class Attention(LightweightModule):
             self.wqkv,
             dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
+            compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
         print("xqkv_fused")

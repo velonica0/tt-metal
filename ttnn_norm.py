@@ -95,26 +95,26 @@ input_tensor_a = ttnn.from_torch(
 )
 torch.set_printoptions(threshold=100000)
 
-# torch_gamma_tensor = torch.rand(1, 1, K, dtype=torch.float16)
-torch_gamma_tensor_before = torch_input_tensor_a[0][0]
+torch_gamma_tensor_before = torch.rand(K, dtype=torch.float16)
+# torch_gamma_tensor_before = torch_input_tensor_a[0][0]
 torch_gamma_tensor = torch_gamma_tensor_before.unsqueeze(0).unsqueeze(0).reshape([1, 1, K // 32, 32])
-print("torch_gamma_tensor")
-print(torch_gamma_tensor)
+# print("torch_gamma_tensor")
+# print(torch_gamma_tensor)
 gamma_tensor = ttnn.from_torch(torch_gamma_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-print("gamma_tensor")
-print(gamma_tensor)
+# print("gamma_tensor")
+# print(gamma_tensor)
 
 # rmsnorm_torch = rmsnorm_no_weight(torch_input_tensor_a)
 rmsnorm_torch = rmsnorm_with_weight(torch_input_tensor_a, torch_gamma_tensor_before)
-print("rmsnorm_torch")
-print(rmsnorm_torch)
+# print("rmsnorm_torch")
+# print(rmsnorm_torch)
 
 
 rmsnorm = ttnn.rms_norm(input_tensor_a, weight=gamma_tensor, epsilon=1e-5)
 torch_rmsnorm_output_tensor = ttnn.to_torch(rmsnorm)
-print("torch_rmsnorm_output_tensor[0]")
-print(torch_rmsnorm_output_tensor[0][0])
-print(torch_rmsnorm_output_tensor[0][1])
+# print("torch_rmsnorm_output_tensor[0]")
+# print(torch_rmsnorm_output_tensor[0][0])
+# print(torch_rmsnorm_output_tensor[0][1])
 
 
 # torch_output_tensor = ttnn.to_torch(output_tensor)
@@ -167,7 +167,7 @@ compute_kernel_config = ttnn.init_device_compute_kernel_config(
 liner_output_tensor = ttnn.linear(
     rmsnorm, input_tensor_b, program_config=program_config, compute_kernel_config=compute_kernel_config
 )
-print(liner_output_tensor)
+# print(liner_output_tensor)
 torch_linear_output_tensor = ttnn.to_torch(liner_output_tensor)
 # print("torch_linear_output_tensor")
 # print(torch_linear_output_tensor[0])
@@ -187,10 +187,13 @@ linear_norm_output_tensor = ttnn.linear_norm(
     input_tensor_b,
     gamma=gamma_tensor,
     epsilon=1e-5,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
     program_config=program_config_fusenorm,
     # compute_kernel_config=compute_kernel_config,
 )
-print(linear_norm_output_tensor)
+print(f"Input B allocated: {linear_norm_output_tensor.is_allocated()}")
+print(f"Input A device: {linear_norm_output_tensor.device()}")
+# print(linear_norm_output_tensor)
 torch_linear_norm_output_tensor = ttnn.to_torch(linear_norm_output_tensor)
 
 # torch.set_printoptions(threshold=10000)

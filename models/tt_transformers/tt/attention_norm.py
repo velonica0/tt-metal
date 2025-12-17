@@ -810,12 +810,12 @@ class Attention(LightweightModule):
             x_11SH,
             self.wqkv,
             gamma=self.weight[weight_name_norm],
-            # gamma=None,
             epsilon=self.eps,
             # dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            # memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
-            program_config=program_config_fusenorm,
+            program_config=self.model_config["XQKV_PREFILL_PROGCFG_NORM"](seq_len),
+            # program_config=program_config_fusenorm,
         )
         print("xqkv_fused")
         print(xqkv_fused)
@@ -838,7 +838,8 @@ class Attention(LightweightModule):
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
-        ttnn.deallocate(x_11SH)
+        # 原始的x_11SH是norm后的结果，因此可以释放，现在的x_11SH直接就是residual(x)，因此不能释放
+        # ttnn.deallocate(x_11SH)
 
         # split qkv into heads
         (
