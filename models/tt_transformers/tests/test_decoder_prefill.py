@@ -151,33 +151,15 @@ def test_decoder_inference(
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
-        # pt_decode_input = (
-        #     torch.rand(
-        #         batch_size,
-        #         max_seq_len,
-        #         model_args.dim,
-        #         dtype=get_ref_model_dype(reference_model, model_args.model_name),
-        #     )
-        #     * 2
-        # ) - 1
-
-        # --- 周期定义 ---
-        MIN_VAL = -2.0
-        MAX_VAL = 2.0
-        STEP = 0.1  # 步长，决定周期的精细程度
-        # ---
-        num_steps = int((MAX_VAL - MIN_VAL) / STEP) + 1
-        period_tensor = torch.linspace(
-            start=MIN_VAL,
-            end=MAX_VAL,
-            steps=num_steps,
-            dtype=get_ref_model_dype(reference_model, model_args.model_name),
-        )
-        total_elements = batch_size * max_seq_len * model_args.dim
-        period_length = period_tensor.numel()
-        num_repeats = (total_elements + period_length - 1) // period_length  # 向上取整
-        pt_decode_input = period_tensor.repeat(num_repeats)[:total_elements]
-        pt_decode_input = pt_decode_input.view(batch_size, max_seq_len, model_args.dim)
+        pt_decode_input = (
+            torch.rand(
+                batch_size,
+                max_seq_len,
+                model_args.dim,
+                dtype=get_ref_model_dype(reference_model, model_args.model_name),
+            )
+            * 2
+        ) - 1
 
         tt_decode_input = pt_decode_input.clone()
         decode_input = model_args.prepare_residual_tensor_prefill(
