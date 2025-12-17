@@ -233,6 +233,22 @@ class TransformerBlock(LightweightModule):
         #     kv_cache=kv_cache,
         #     attn_mask=attn_mask,
         # )
+
+        if self.args.is_multichip and not self.args.is_distributed_norm("prefill"):  # 目前我只做了prefill
+            x = ttnn.experimental.all_gather_async(
+                x,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                topology=self.args.ccl_topology(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+
         attn_out = self.attention.forward(
             x,
             current_pos,
