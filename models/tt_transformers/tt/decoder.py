@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+import time
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -214,13 +216,9 @@ class TransformerBlock(LightweightModule):
         rot_mats = (
             rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
         )
-
-        print("x")
-        print(x)
+        start_time = time.perf_counter()
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
-        print("attn_in")
-        print(attn_in)
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -234,6 +232,8 @@ class TransformerBlock(LightweightModule):
             kv_cache=kv_cache,
             attn_mask=attn_mask,
         )
+        end_time = time.perf_counter()
+        print(f"耗时: {end_time - start_time:.6f} 秒")
 
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(

@@ -784,10 +784,6 @@ class Attention(LightweightModule):
         #     program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         # )
 
-        print(x_11SH)
-        print(self.wqkv)
-        print(f"Memory config: {ttnn.get_memory_config(x_11SH)}")
-        print(f"Memory config: {ttnn.get_memory_config(self.wqkv)}")
         program_config_fusenorm = ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
@@ -800,12 +796,7 @@ class Attention(LightweightModule):
             fused_activation=None,
             fuse_batch=False,
         )
-        print("x_11SH")
-        print(x_11SH)
-        print("self.wqkv")
-        print(self.wqkv)
-        print("self.weight[weight_name_norm]")
-        print(self.weight[weight_name_norm])
+
         xqkv_fused = ttnn.linear_norm(
             x_11SH,
             self.wqkv,
@@ -817,8 +808,6 @@ class Attention(LightweightModule):
             program_config=self.model_config["XQKV_PREFILL_PROGCFG_NORM"](seq_len),
             # program_config=program_config_fusenorm,
         )
-        print("xqkv_fused")
-        print(xqkv_fused)
 
         # FIXME: surely ttnn.linear bias should work?
         if self.wqkv_bias_prefill is not None:

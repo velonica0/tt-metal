@@ -688,10 +688,6 @@ class Attention(LightweightModule):
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
         # MatmulMultiCoreReuseMultiCastProgramConfig
-        print("x_11SH")
-        print(x_11SH)
-        print("self.wqkv")
-        print(self.wqkv)
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
@@ -700,8 +696,6 @@ class Attention(LightweightModule):
             compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
-        print("xqkv_fused")
-        print(xqkv_fused)
 
         # FIXME: surely ttnn.linear bias should work?
         if self.wqkv_bias_prefill is not None:

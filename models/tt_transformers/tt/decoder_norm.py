@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+import time
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -234,6 +236,7 @@ class TransformerBlock(LightweightModule):
         #     attn_mask=attn_mask,
         # )
 
+        start_time = time.perf_counter()
         if self.args.is_multichip and not self.args.is_distributed_norm("prefill"):  # 目前我只做了prefill
             x = ttnn.experimental.all_gather_async(
                 x,
@@ -248,7 +251,6 @@ class TransformerBlock(LightweightModule):
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
             )
-
         attn_out = self.attention.forward(
             x,
             current_pos,
@@ -262,6 +264,8 @@ class TransformerBlock(LightweightModule):
             attn_mask=attn_mask,
             weight_name_norm="attention_norm",
         )
+        end_time = time.perf_counter()
+        print(f"耗时: {end_time - start_time:.6f} 秒")
 
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
@@ -327,7 +331,6 @@ class TransformerBlock(LightweightModule):
 
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
 
-        print("out = ttnn.add(")
         out = ttnn.add(
             residual,
             hidden_states,
@@ -336,6 +339,5 @@ class TransformerBlock(LightweightModule):
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
-        print("out = ttnn.add( after")
 
         return out  # fractured across devices

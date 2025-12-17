@@ -65,7 +65,7 @@ def test_decoder_inference(
     batch_size = 1  # For prefill we only support batch_size = 1
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
-    model_args.n_layers = 1
+    model_args.n_layers = 2
 
     state_dict = model_args.load_state_dict()
 
@@ -149,6 +149,41 @@ def test_decoder_inference(
         paged_attention_config=paged_attention_config,
     )
 
+    tt_model_compile = TransformerBlock(
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        state_dict=state_dict,
+        weight_cache_path=model_args.weight_cache_path(dtype),
+        layer_num=1,
+        dtype=dtype,
+        transformation_mats=transformation_mats,
+        args=model_args,
+        paged_attention_config=paged_attention_config,
+    )
+
+    pt_decode_input = (
+        torch.rand(
+            batch_size,
+            max_seq_len,
+            model_args.dim,
+            dtype=get_ref_model_dype(reference_model, model_args.model_name),
+        )
+        * 2
+    ) - 1
+    tt_decode_input_compile = pt_decode_input.clone()
+    decode_input_compile = model_args.prepare_residual_tensor_prefill(
+        tt_decode_input_compile,
+    )
+    tt_out_compile = tt_model_compile(
+        decode_input_compile,
+        None,
+        rot_mats_global=rot_mats,
+        rot_mats_local=rot_mats_local,
+        user_id=1,
+        mode="prefill",
+        page_table=page_table_tt,
+    )
+
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
         pt_decode_input = (
@@ -192,13 +227,10 @@ def test_decoder_inference(
             mode="prefill",
             page_table=page_table_tt,
         )
-        print(tt_out)
-        print("tt_out = ttnn.to_torch(")
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
-        print("tt_out = ttnn.to_torch( after")
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(
             batch_size, max_seq_len, -1
         )  # [ batch_size, seq, hidden_dim]
