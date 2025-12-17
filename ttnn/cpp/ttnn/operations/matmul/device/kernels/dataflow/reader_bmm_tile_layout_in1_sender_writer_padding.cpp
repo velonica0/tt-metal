@@ -537,24 +537,24 @@ void kernel_main() {
                             noc_async_write_barrier();
                             cb_pop_front(cb_id_out0, out_subblock_tile_count);
                             out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
-                            DPRINT << "=== cb_id_out0 ===, sbh:" << sbh << " sbw: " << sbw << ENDL();
+                            // DPRINT << "=== cb_id_out0 ===, sbh:" << sbh << " sbw: " << sbw << ENDL();
 
-                            DPRINT << TileSlice(
-                                          cb_id_out0,
-                                          0,
-                                          SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                                          true,
-                                          false)
-                                   << ENDL();
+                            // DPRINT << TileSlice(
+                            //               cb_id_out0,
+                            //               0,
+                            //               SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+                            //               true,
+                            //               false)
+                            //        << ENDL();
                         }
-                        DPRINT<<"rapport:::::::::::::::::sbh:" << sbh << ENDL();
+                        // DPRINT<<"rapport:::::::::::::::::sbh:" << sbh << ENDL();
                         // Pop fully padded subblocks along the row
                         if (bw == num_blocks_w_dim_ - 1) {
-                            DPRINT<<"cb_wait_front(cb_id_out0, padded_block_tiles_w_skip); WAIT WAIT WAIT"<<ENDL();
+                            // DPRINT<<"cb_wait_front(cb_id_out0, padded_block_tiles_w_skip); WAIT WAIT WAIT"<<ENDL();
                             cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
-                            DPRINT<<"cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);"<<ENDL();
+                            // DPRINT<<"cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);"<<ENDL();
                             cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
-                            DPRINT<<"cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);"<<ENDL();
+                            // DPRINT<<"cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);"<<ENDL();
                         }
                         out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
                     }

@@ -10,7 +10,7 @@
 #include "pad_tile.hpp"
 #include "ckernel.h"
 
-#include "debug/dprint.h" 
+#include "debug/dprint.h"
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -56,10 +56,10 @@ void kernel_main() {
     constexpr uint32_t MtKt = get_compile_time_arg_val(18);  // if 0
     constexpr uint32_t batch = get_compile_time_arg_val(19);
 
-    DPRINT << "in0_mcast_dest_noc_start_x:" << in0_mcast_dest_noc_start_x << ENDL();
-    DPRINT << "in0_mcast_dest_noc_start_y:" << in0_mcast_dest_noc_start_y << ENDL();
-    DPRINT << "in0_mcast_dest_noc_end_x:" << in0_mcast_dest_noc_end_x << ENDL();
-    DPRINT << "in0_mcast_dest_noc_end_y:" << in0_mcast_dest_noc_end_y << ENDL();
+    // DPRINT << "in0_mcast_dest_noc_start_x:" << in0_mcast_dest_noc_start_x << ENDL();
+    // DPRINT << "in0_mcast_dest_noc_start_y:" << in0_mcast_dest_noc_start_y << ENDL();
+    // DPRINT << "in0_mcast_dest_noc_end_x:" << in0_mcast_dest_noc_end_x << ENDL();
+    // DPRINT << "in0_mcast_dest_noc_end_y:" << in0_mcast_dest_noc_end_y << ENDL();
 
     // sparsity args
 
@@ -151,8 +151,8 @@ void kernel_main() {
 #endif  // IN0_SHARDED
 #endif  // SKIP_MCAST
 
-    DPRINT << "Tenstorrent Reader kernel started" << ENDL();
-    DPRINT << "in0_block_w: " << in0_block_w << ENDL(); 
+    // DPRINT << "Tenstorrent Reader kernel started" << ENDL();
+    // DPRINT << "in0_block_w: " << in0_block_w << ENDL();
 
     uint32_t l1_write_addr_sparsity = 0;
     if constexpr (batchB > 0) {
@@ -255,7 +255,6 @@ void kernel_main() {
                                 // 最后一个block的零填充
                                 if constexpr (in0_last_ktile_w > 0) {
                                     if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
-                                        
                                         noc_async_read_barrier();
                                         const DataFormat in0_data_format = get_dataformat(cb_id_in0);
                                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);

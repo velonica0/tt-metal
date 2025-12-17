@@ -124,8 +124,8 @@ void MAIN {
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
-    DPRINT_UNPACK(DPRINT << "tt in0_num_subblocks " << in0_num_subblocks << ENDL());
-    DPRINT_UNPACK(DPRINT << "tt in1_num_subblocks " << in1_num_subblocks << ENDL());
+    // DPRINT_UNPACK(DPRINT << "tt in0_num_subblocks " << in0_num_subblocks << ENDL());
+    // DPRINT_UNPACK(DPRINT << "tt in1_num_subblocks " << in1_num_subblocks << ENDL());
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_3;

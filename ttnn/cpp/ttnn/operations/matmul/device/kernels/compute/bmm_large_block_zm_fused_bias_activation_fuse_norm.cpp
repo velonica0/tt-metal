@@ -146,11 +146,11 @@ void MAIN {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
-    DPRINT << "Compute kernel started " << ENDL();
-    DPRINT << "do_gamma " << do_gamma << ENDL();
+    // DPRINT << "Compute kernel started " << ENDL();
+    // DPRINT << "do_gamma " << do_gamma << ENDL();
 
-    DPRINT_UNPACK(DPRINT << "me in0_num_subblocks " << in0_num_subblocks << ENDL());
-    DPRINT_UNPACK(DPRINT << "me in1_num_subblocks " << in1_num_subblocks << ENDL());
+    // DPRINT_UNPACK(DPRINT << "me in0_num_subblocks " << in0_num_subblocks << ENDL());
+    // DPRINT_UNPACK(DPRINT << "me in1_num_subblocks " << in1_num_subblocks << ENDL());
     // DPRINT << "num_blocks_w_dim"<<num_blocks_w_dim<<ENDL();
 
     mm_block_init(
@@ -248,18 +248,20 @@ void MAIN {
             }
             reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 
-            DPRINT_UNPACK({
-                DPRINT << "=== cb_xmm ===, bh:" << bh << ENDL();
-                DPRINT
-                    << TileSlice<128>(
-                           cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-                DPRINT << "=== cb_xmm2 ===, bh:" << bh << ENDL();
-                DPRINT
-                    << TileSlice<128>(
-                           cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-            })
+            // DPRINT_UNPACK({
+            //     DPRINT << "=== cb_xmm ===, bh:" << bh << ENDL();
+            //     DPRINT
+            //         << TileSlice<128>(
+            //                cb_xmm, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            //     DPRINT << "=== cb_xmm2 ===, bh:" << bh << ENDL();
+            //     DPRINT
+            //         << TileSlice<128>(
+            //                cb_xmm2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            // })
 
             // 第二步：计算E[x^2]归一化因子
             // 这个循环对 cb_xmm2 中的所有平方值进行归约求和,然后乘以 cb_scaler 得到均值,结果存入 cb_ex2。
@@ -289,13 +291,14 @@ void MAIN {
             cb_push_back(cb_ex2, 1);
             cb_wait_front(cb_ex2, 1);
 
-            DPRINT_UNPACK({
-                DPRINT << "=== cb_ex2 ===, bh:" << bh << ENDL();
-                DPRINT
-                    << TileSlice(
-                           cb_ex2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-                    << ENDL();
-            })
+            // DPRINT_UNPACK({
+            //     DPRINT << "=== cb_ex2 ===, bh:" << bh << ENDL();
+            //     DPRINT
+            //         << TileSlice(
+            //                cb_ex2, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+            //                false)
+            //         << ENDL();
+            // })
 
             /* Var(x) + eps
             * add epsilon E[(x-E[x])^2]+eps
@@ -361,13 +364,13 @@ void MAIN {
                 } else {
                     pack_reconfig_data_format(cb_fusion);
                 }
-                DPRINT_PACK(
-                    DPRINT << "cb_reserve_back(cb_im_or_out, in0_block_w);" << " wt:" << wt
-                           << " cb_im_or_out:" << static_cast<uint32_t>(cb_im_or_out) << ENDL());
+                // DPRINT_PACK(
+                //     DPRINT << "cb_reserve_back(cb_im_or_out, in0_block_w);" << " wt:" << wt
+                //            << " cb_im_or_out:" << static_cast<uint32_t>(cb_im_or_out) << ENDL());
                 cb_reserve_back(cb_im_or_out, in0_block_w);
-                DPRINT_PACK(
-                    DPRINT << "cb_reserve_back(cb_im_or_out, in0_block_w); END NED END" << " wt:" << wt
-                           << " cb_im_or_out:" << static_cast<uint32_t>(cb_im_or_out) << ENDL());
+                // DPRINT_PACK(
+                //     DPRINT << "cb_reserve_back(cb_im_or_out, in0_block_w); END NED END" << " wt:" << wt
+                //            << " cb_im_or_out:" << static_cast<uint32_t>(cb_im_or_out) << ENDL());
 
                 reconfig_data_format_srca(cb_fusion, cb_xmm);
 
@@ -377,16 +380,16 @@ void MAIN {
                     // cb_xmm[wt+wtr] since we pop in0_block_w * num_blocks_inner_dim from cb_xmm after the entire loop
                     // 第二次使用：应用归一化算子
                     mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
-                    DPRINT_MATH(
-                        DPRINT << "mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);" << " wt:" << wt
-                               << " wtr:" << wtr << ENDL());
+                    // DPRINT_MATH(
+                    //     DPRINT << "mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);" << " wt:" << wt
+                    //            << " wtr:" << wtr << ENDL());
                     pack_tile(wtr, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
                 }
 
                 cb_push_back(cb_im_or_out, in0_block_w);  // if no gamma/beta are provided, this will be passed on to the writer
-                DPRINT_PACK(
-                    DPRINT << "cb_push_back(cb_im_or_out, in0_block_w);" << " wt:" << wt
-                           << " cb_im_or_out:" << static_cast<uint32_t>(cb_im_or_out) << ENDL());
+                // DPRINT_PACK(
+                //     DPRINT << "cb_push_back(cb_im_or_out, in0_block_w);" << " wt:" << wt
+                //            << " cb_im_or_out:" << static_cast<uint32_t>(cb_im_or_out) << ENDL());
                 REL();
 
                 if constexpr (!(do_gamma == 0 )) {
@@ -421,7 +424,7 @@ void MAIN {
                     cb_wait_front(cb_fusion, in0_block_w);
                     for (uint32_t wtr = 0; wtr < in0_block_w; wtr++) {
                         mul_tiles_bcast_rows(cb_fusion, cb_gamma, wtr, wt + wtr, wtr);  // tile *= 1/(sum(exp(x)))
-                        dprint_tensix_dest_reg(wtr);
+                        // dprint_tensix_dest_reg(wtr);
                         pack_tile(wtr, cb_outg);  // pack either to intermediate (cb_fusion or out0)
                     }
                     cb_pop_front(cb_fusion, in0_block_w);
@@ -460,37 +463,37 @@ void MAIN {
             // 由于不知道对应layernorm.cpp中的cb_norm_output哪个，所以直接与dst寄存器进行比较(dprint_tensix_dest_reg)
             // TileSlice的第二个参数代表第几个tile，如果是8、9、10、11，则对应着layernorm.cpp中的if (wt == 8)
             // {dprint_tensix_dest_reg(wtr);}，即打印wt从8开始的几个tile
-            DPRINT_UNPACK({
-                DPRINT << "=== cb_norm_output === " << ENDL();
-                DPRINT << TileSlice<128>(
-                              cb_norm_output,
-                              0,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-                DPRINT << TileSlice<128>(
-                              cb_norm_output,
-                              1,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-                DPRINT << TileSlice<128>(
-                              cb_norm_output,
-                              2,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-                DPRINT << TileSlice<128>(
-                              cb_norm_output,
-                              3,
-                              SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
-                              true,
-                              false)
-                       << ENDL();
-            })
+            // DPRINT_UNPACK({
+            //     DPRINT << "=== cb_norm_output === " << ENDL();
+            //     DPRINT << TileSlice<128>(
+            //                   cb_norm_output,
+            //                   0,
+            //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+            //                   true,
+            //                   false)
+            //            << ENDL();
+            //     DPRINT << TileSlice<128>(
+            //                   cb_norm_output,
+            //                   1,
+            //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+            //                   true,
+            //                   false)
+            //            << ENDL();
+            //     DPRINT << TileSlice<128>(
+            //                   cb_norm_output,
+            //                   2,
+            //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+            //                   true,
+            //                   false)
+            //            << ENDL();
+            //     DPRINT << TileSlice<128>(
+            //                   cb_norm_output,
+            //                   3,
+            //                   SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1},
+            //                   true,
+            //                   false)
+            //            << ENDL();
+            // })
 
             // 现在的输入是cb_norm_output，一整行已经在L1中。等待的是整个K(in0_block_w * num_blocks_inner_dim)
             cb_wait_front(cb_norm_output, in0_block_w * num_blocks_inner_dim);
@@ -664,10 +667,8 @@ void MAIN {
 #ifdef PACKER_L1_ACC
                                 if (block == 0) {  // no accumulation for first iteration
                                     PACK((llk_pack_reconfig_l1_acc(0)));
-                                    DPRINT_PACK(DPRINT << "llk_pack_reconfig_l1_acc(0)" << "in1_subblock:" << in1_subblock << ENDL());
                                 } else if (block == 1) {
                                     PACK((llk_pack_reconfig_l1_acc(1)));
-                                    DPRINT_PACK(DPRINT << "llk_pack_reconfig_l1_acc(1)" << "in1_subblock:" << in1_subblock << ENDL());
                                 }
 #endif
 
@@ -741,8 +742,8 @@ void MAIN {
             // 这一行结束计算了，所以应该pop
             cb_pop_front(cb_norm_output, in0_block_w * num_blocks_inner_dim);
         }
-        DPRINT << "for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) END END END" << ENDL();
+        // DPRINT << "for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) END END END" << ENDL();
     }
-    DPRINT << "for (uint32_t b = 0; b < batch; b++) END END END" << ENDL();
+    // DPRINT << "for (uint32_t b = 0; b < batch; b++) END END END" << ENDL();
 }
 }  // namespace NAMESPACE

@@ -17,8 +17,7 @@
 
 // 与ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_unary_interleaved_ln_rm_gb.cpp进行融合
 void kernel_main() {
-
-    DPRINT << "Reader kernel begin: kernel_main" << ENDL();
+    // DPRINT << "Reader kernel begin: kernel_main" << ENDL();
 
     uint32_t rt_args_idx = 0;
     // in0 tensor args
@@ -55,9 +54,10 @@ void kernel_main() {
     generate_bcast_col_scalar(eps_cb_id, eps);
     uint32_t gamma_addr = get_arg_val<uint32_t>(rt_args_idx++);
     // uint32_t beta_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    DPRINT << "=== eps_cb_id after=== " << ENDL();
-    DPRINT << TileSlice(eps_cb_id, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true, false)
-           << ENDL();
+    // DPRINT << "=== eps_cb_id after=== " << ENDL();
+    // DPRINT << TileSlice(eps_cb_id, 0, SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}, true,
+    // false)
+    //        << ENDL();
 
     // COMPILE TIME ARGS
     // in0 tensor args
@@ -255,19 +255,16 @@ void kernel_main() {
 #endif  // SKIP_MCAST
 
                         cb_push_back(cb_id_in0, in0_block_num_tiles);
-                        DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles); END END END" << ENDL();
+                        // DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles); END END END" << ENDL();
                     }
-                    DPRINT << "FUSE_GAMMA BEFORE" << ENDL();
 #ifdef FUSE_GAMMA
-                    DPRINT << "FUSE_GAMMA AFTER" << ENDL();
                     // 1.读取gamma会导致卡住 2.广播会导致除了(0,0)的其他core更早卡住
                     // 读取gamma
                     // 对应 for (uint32_t wt = 0; wt < Wt; wt += blk)
                     if (bh == 0) {
                         for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
-                            DPRINT << "if (bh == 0) {" << ENDL();
                             cb_reserve_back(cb_id_gamma, in0_block_num_tiles);
-                            DPRINT << "cb_reserve_back(cb_id_gamma, in0_block_num_tiles); END END END" << ENDL();
+                            // DPRINT << "cb_reserve_back(cb_id_gamma, in0_block_num_tiles); END END END" << ENDL();
 
                             uint32_t l1_write_addr = get_write_ptr(cb_id_gamma);
                             uint32_t gamma_start_address =
@@ -277,12 +274,12 @@ void kernel_main() {
                             for (uint32_t w = 0; w < in0_block_w; ++w) {
                                 uint64_t gamma_noc_addr = get_noc_addr(block + w, addrg);
                                 noc_async_read(gamma_noc_addr, l1_write_addr, 64);
-                                DPRINT << "noc_async_read(gamma_noc_addr, l1_write_addr, 64); END END END" << ENDL();
+                                // DPRINT << "noc_async_read(gamma_noc_addr, l1_write_addr, 64); END END END" << ENDL();
                                 gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
                                 noc_async_read_barrier();
                                 noc_async_read(gamma_noc_addr, l1_write_addr + 512, 32);
-                                DPRINT << "noc_async_read(gamma_noc_addr, l1_write_addr + 512, 32); END END END"
-                                       << ENDL();
+                                // DPRINT << "noc_async_read(gamma_noc_addr, l1_write_addr + 512, 32); END END END"
+                                //        << ENDL();
                                 l1_write_addr += gamma_tile_bytes;
                             }
 
@@ -313,10 +310,10 @@ void kernel_main() {
                                 in0_mcast_num_cores);
 #endif  // SKIP_MCAST
 
-                            DPRINT << "cb_push_back(cb_id_gamma, in0_block_num_tiles); " << ENDL();
+                            // DPRINT << "cb_push_back(cb_id_gamma, in0_block_num_tiles); " << ENDL();
                             cb_push_back(cb_id_gamma, in0_block_num_tiles);
-                            DPRINT << "cb_push_back(cb_id_gamma, in0_block_num_tiles); bh: " << bh
-                                   << " block: " << block << ENDL();
+                            // DPRINT << "cb_push_back(cb_id_gamma, in0_block_num_tiles); bh: " << bh
+                            //        << " block: " << block << ENDL();
                         }
                     }
 #endif
