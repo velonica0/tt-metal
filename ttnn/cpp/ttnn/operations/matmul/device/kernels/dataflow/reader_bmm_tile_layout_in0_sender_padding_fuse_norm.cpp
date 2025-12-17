@@ -129,7 +129,8 @@ void kernel_main() {
     // }
 
     constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_10;
+    constexpr uint32_t cb_id_gamma = 10;
+    // constexpr auto cb_id_gamma = tt::CBIndex::c_10;
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_single_tile_size_bytes;
     constexpr uint32_t one_tile = 1;
@@ -182,98 +183,53 @@ void kernel_main() {
         // }
 
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
-//             if constexpr (batchB > 0) {
-//                 volatile auto is_batch_valid =
-//                     ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
+            uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
+            for (uint32_t bh = 0; bh < num_blocks_h_dim;
+                 ++bh) {  // pre_core_M（这就是将之前一次性读取多个变为一次性读取一行）
+                for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {  // 1
+                    uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
+                    // 对应 for (uint32_t wt = 0; wt < Wt; wt += blk)
+                    for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                        cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
-//                 if constexpr (get_batch_from_reader) {
-// #ifndef SKIP_MCAST
-//                     // First broadcast this to other cores
-//                     noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
-//                     noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
-//                     noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, is_batch_valid ? VALID : IGNORE_BATCH);
-//                     ckernel::wait(500);
-//                     noc_semaphore_set_multicast(
-//                         in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
-//                     noc_async_writes_flushed();
-//                     // Reset the semaphore value to VALID
-//                     noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, VALID);
-// #endif  // SKIP_MCAST
-//         // We need to pass the value to compute UNPACK regardless of the value of is_batch_valid
-//                     cb_reserve_back(nnz_cb_id, 1);
-//                     auto nnz_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(nnz_cb_id));
-//                     nnz_ptr[0] = is_batch_valid;
-//                     cb_push_back(nnz_cb_id, 1);
-//                 }
+                        uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+                        uint32_t in0_start_address =
+                            l1_write_addr_in0;  // copy start address of block, to be used for mcasting
 
-//                 if (!is_batch_valid) {
-//                     if constexpr (!bcast_A) {
-//                         in0_tensor_start_tile_id += MtKt;
-//                     }
-//                     continue;
-//                 }
-//             }
+                        // Copy in0 block into CB, as the default kernel
+                        uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
+                        for (uint32_t h = 0; h < in0_block_h; ++h) {  // 显示指定为1
+                            uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
+                            // 对应 for (uint32_t r = 0; r < blk; r++)
+                            for (uint32_t w = 0; w < in0_block_w; ++w) {
+                                if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
+                                    // DPRINT << "noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);" << "
+                                    // bh=" << bh
+                                    // << ",  bw=" << bw << ",  block=" << block << ",  h=" << h << ", w=" << w <<
+                                    // ENDL();
+                                    noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
+                                }
 
-// DPRINT << "num_blocks_h_dim=" << num_blocks_h_dim << ENDL();
-// DPRINT << "num_blocks_w_dim=" << num_blocks_w_dim << ENDL();
-// DPRINT << "num_blocks_inner_dim=" << num_blocks_inner_dim << ENDL();
+                                // Zero out padded regions for the very last tile
+                                // 最后一个block的零填充
+                                if constexpr (in0_last_ktile_w > 0) {
+                                    if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
+                                        noc_async_read_barrier();
+                                        const DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
+                                    }
+                                }
 
-uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
-for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {      // pre_core_M（这就是将之前一次性读取多个变为一次性读取一行）
-    for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {  // 1
-        uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
-        // 对应 for (uint32_t wt = 0; wt < Wt; wt += blk)
-        // DPRINT << "num_blocks_inner_dim:" << num_blocks_inner_dim <<" bh:" << bh << ENDL();
-        for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
-            // if constexpr (fuse_op) {
-            //     fused_op_receiver.update_current_block_start_tile_id(
-            //         block, in0_tensor_current_inner_dim_block_start_tile_id, in0_tensor_start_tile_id);
-            // }
-
-            // Operand 0
-            // Common for sharded and interleaved paths
-            // DPRINT << "cb_reserve_back(cb_id_in0, in0_block_num_tiles);"  << ENDL();
-            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-            // DPRINT << "cb_reserve_back(cb_id_in0, in0_block_num_tiles);" << " block:" << block <<" bh:" << bh <<
-            // ENDL();
-
-            uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-
-            uint32_t in0_start_address = l1_write_addr_in0;  // copy start address of block, to be used for mcasting
-
-            // Copy in0 block into CB, as the default kernel
-            uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
-            for (uint32_t h = 0; h < in0_block_h; ++h) {  // 显示指定为1
-                uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
-                // 对应 for (uint32_t r = 0; r < blk; r++)
-                for (uint32_t w = 0; w < in0_block_w; ++w) {
-                    if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
-                        // DPRINT << "noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);" << " bh=" << bh
-                        // << ",  bw=" << bw << ",  block=" << block << ",  h=" << h << ", w=" << w << ENDL();
-                        noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
-                    }
-
-                    // Zero out padded regions for the very last tile
-                    // 最后一个block的零填充
-                    if constexpr (in0_last_ktile_w > 0) {
-                        if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
-                            noc_async_read_barrier();
-                            const DataFormat in0_data_format = get_dataformat(cb_id_in0);
-                            pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
+                                l1_write_addr_in0 += in0_single_tile_size_bytes;  // 字节数
+                                in0_tensor_tile_id += in0_tensor_stride_w;        // 索引id
+                            }
+                            in0_tensor_row_start_tile_id += in0_tensor_stride_h;
                         }
-                    }
+                        in0_tensor_current_inner_dim_block_start_tile_id += in0_tensor_next_inner_dim_block_stride;
 
-                    l1_write_addr_in0 += in0_single_tile_size_bytes;  // 字节数
-                    in0_tensor_tile_id += in0_tensor_stride_w;        // 索引id
-                }
-                in0_tensor_row_start_tile_id += in0_tensor_stride_h;
-            }
-            in0_tensor_current_inner_dim_block_start_tile_id += in0_tensor_next_inner_dim_block_stride;
+                        // Barrier! make sure the reads are done
+                        noc_async_read_barrier();
 
-            // Barrier! make sure the reads are done
-            noc_async_read_barrier();
-
-            // 目前只有第一列core可以计算（结果只有第一列的不是-inf），还需要广播到其他列
 #ifndef SKIP_MCAST
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
@@ -292,44 +248,81 @@ for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {      // pre_core_M（这就
                             in0_mcast_num_cores,
                             true);
 
-                        // Note: no need for write barrier, since these two multicasts are done on the same noc id, same
-                        // vc, same cmd_buf Also, this only works because we are setting VCs statically (using
-                        // NOC_CMD_STATIC_VC).
-
-                        // We should also multicast the flag to destinations
-                        // num_dests must not include source, since we are NOT really doing a local copy!
                         noc_semaphore_set_multicast(
                             in0_mcast_receiver_semaphore_addr,
                             in0_mcast_receiver_semaphore_noc_addr,
                             in0_mcast_num_cores);
 #endif  // SKIP_MCAST
 
-                        // Common for sharded and interleaved paths
-                        // DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles);" << " block:" << block <<" bh:" <<
-                        // bh << ENDL();
                         cb_push_back(cb_id_in0, in0_block_num_tiles);
                         DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles); END END END" << ENDL();
-        }
-    }
-                in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
+                    }
+                    DPRINT << "FUSE_GAMMA BEFORE" << ENDL();
+#ifdef FUSE_GAMMA
+                    DPRINT << "FUSE_GAMMA AFTER" << ENDL();
+                    // 1.读取gamma会导致卡住 2.广播会导致除了(0,0)的其他core更早卡住
+                    // 读取gamma
+                    // 对应 for (uint32_t wt = 0; wt < Wt; wt += blk)
+                    if (bh == 0) {
+                        for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                            DPRINT << "if (bh == 0) {" << ENDL();
+                            cb_reserve_back(cb_id_gamma, in0_block_num_tiles);
+                            DPRINT << "cb_reserve_back(cb_id_gamma, in0_block_num_tiles); END END END" << ENDL();
 
-                // if (bh == 0) {
-                //     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
-                //         cb_reserve_back(cb_id_gamma, in0_block_w);
-                //         uint32_t l1_write_addr_gamma = get_write_ptr(cb_id_gamma);
-                //         for (uint32_t w = 0; w < in0_block_w; ++w) {
-                //             uint64_t gamma_noc_addr = get_noc_addr(block * in0_block_w + w, addrg);
-                //             // 第一次读取:读取前 32 字节到第一个 face
-                //             noc_async_read(gamma_noc_addr, l1_write_addr_gamma, 32);
-                //             // 第二次读取:读取后 32 字节到第二个 face (偏移 512)
-                //             noc_async_read(gamma_noc_addr + 32, l1_write_addr_gamma + 512, 32);
-                //             l1_write_addr_gamma += gamma_tile_bytes;
-                //         }
-                //         noc_async_read_barrier();
-                //         cb_push_back(cb_id_gamma, in0_block_w);
-                //     }
-                // }
-}
+                            uint32_t l1_write_addr = get_write_ptr(cb_id_gamma);
+                            uint32_t gamma_start_address =
+                                l1_write_addr;  // copy start address of block, to be used for mcasting
+
+                            // 对应 for (uint32_t r = 0; r < blk; r++)
+                            for (uint32_t w = 0; w < in0_block_w; ++w) {
+                                uint64_t gamma_noc_addr = get_noc_addr(block + w, addrg);
+                                noc_async_read(gamma_noc_addr, l1_write_addr, 64);
+                                DPRINT << "noc_async_read(gamma_noc_addr, l1_write_addr, 64); END END END" << ENDL();
+                                gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
+                                noc_async_read_barrier();
+                                noc_async_read(gamma_noc_addr, l1_write_addr + 512, 32);
+                                DPRINT << "noc_async_read(gamma_noc_addr, l1_write_addr + 512, 32); END END END"
+                                       << ENDL();
+                                l1_write_addr += gamma_tile_bytes;
+                            }
+
+                            // Barrier! make sure the reads are done
+                            noc_async_read_barrier();
+
+#ifndef SKIP_MCAST
+                            // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
+                            // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back
+                            // to zero for the next block
+                            noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
+                            noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
+
+                            // Now we have the block in the CB address, we can mcast to dests!
+                            uint64_t in0_multicast_data_addr = in0_multicast_data_noc | gamma_start_address;
+
+                            // num_dests must not include source, since we are NOT really doing a local copy!
+                            noc_async_write_multicast(
+                                gamma_start_address,
+                                in0_multicast_data_addr,
+                                in0_block_size_bytes,
+                                in0_mcast_num_cores,
+                                true);
+
+                            noc_semaphore_set_multicast(
+                                in0_mcast_receiver_semaphore_addr,
+                                in0_mcast_receiver_semaphore_noc_addr,
+                                in0_mcast_num_cores);
+#endif  // SKIP_MCAST
+
+                            DPRINT << "cb_push_back(cb_id_gamma, in0_block_num_tiles); " << ENDL();
+                            cb_push_back(cb_id_gamma, in0_block_num_tiles);
+                            DPRINT << "cb_push_back(cb_id_gamma, in0_block_num_tiles); bh: " << bh
+                                   << " block: " << block << ENDL();
+                        }
+                    }
+#endif
+                }
+                in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
+            }
 
             // if constexpr (!bcast_A) {
             //     in0_tensor_start_tile_id += MtKt;

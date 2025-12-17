@@ -590,6 +590,15 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
+    if (gamma.has_value()) {
+        log_info(tt::LogOp, "GAMMA = 1;");
+        mm_kernel_defines["FUSE_GAMMA"] = "1";
+        mm_kernel_in0_sender_sharded_defines["FUSE_GAMMA"] = "1";
+        mm_kernel_in0_sender_interleaved_defines["FUSE_GAMMA"] = "1";
+        mm_kernel_in1_sender_writer_defines["FUSE_GAMMA"] = "1";
+        mm_kernel_in1_receiver_writer_defines["FUSE_GAMMA"] = "1";
+        mm_kernel_in1_receiver_writer_other_noc_setup_defines["FUSE_GAMMA"] = "1";
+    }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), cores.size(), mm_kernel_defines);
@@ -1025,6 +1034,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
                 tt::tt_metal::CircularBufferConfig(in10_t * gamma_single_tile_size, {{in10_cb_index, gamma_cb_data_format}})
                     .set_page_size(in10_cb_index, gamma_single_tile_size);
             tt::tt_metal::CreateCircularBuffer(program, all_cores, in10_cb_config);
+            log_info(tt::LogOp, "in10_CB_size:{}", in10_t);
 
             tt_metal::CircularBufferConfig c_intermed5_config =
             tt_metal::CircularBufferConfig(im5_t * single_tile_size, {{tt::CBIndex::c_22, cb_data_format}})

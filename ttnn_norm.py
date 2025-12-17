@@ -21,6 +21,23 @@ def rmsnorm_no_weight(X, eps=1e-6):
     return Y
 
 
+def rmsnorm_with_weight(X, weight, eps=1e-6):
+    """
+    带 weight 参数的 RMSNorm 实现。
+    输入 X: (R, C)
+    输入 weight: (C,) - 其长度应与 X 的特征维度相同
+    """
+    # 1. 计算均方根 (RMS)
+    # 这里的计算逻辑保持不变
+    rms = X.pow(2).mean(dim=-1, keepdim=True).sqrt()
+
+    # 2. 归一化并应用 weight
+    # 公式: Y = (X / (rms + eps)) * weight
+    Y = (X / (rms + eps)) * weight
+
+    return Y
+
+
 def create_dram_sharded_mem_config(k, n):
     dram_weight_grid = ttnn.CoreRangeSet(
         {
@@ -76,16 +93,28 @@ input_tensor_a = ttnn.from_torch(
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
     mesh_mapper=ttnn.ReplicateTensorToMesh(device),
 )
-rmsnorm_torch = rmsnorm_no_weight(torch_input_tensor_a)
-print("input_tensor_a")
-print(input_tensor_a)
-
-
-rmsnorm = ttnn.rms_norm(input_tensor_a, epsilon=1e-5)
-torch_rmsnorm_output_tensor = ttnn.to_torch(rmsnorm)
 torch.set_printoptions(threshold=100000)
+
+# torch_gamma_tensor = torch.rand(1, 1, K, dtype=torch.float16)
+torch_gamma_tensor_before = torch_input_tensor_a[0][0]
+torch_gamma_tensor = torch_gamma_tensor_before.unsqueeze(0).unsqueeze(0).reshape([1, 1, K // 32, 32])
+print("torch_gamma_tensor")
+print(torch_gamma_tensor)
+gamma_tensor = ttnn.from_torch(torch_gamma_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+print("gamma_tensor")
+print(gamma_tensor)
+
+# rmsnorm_torch = rmsnorm_no_weight(torch_input_tensor_a)
+rmsnorm_torch = rmsnorm_with_weight(torch_input_tensor_a, torch_gamma_tensor_before)
+print("rmsnorm_torch")
+print(rmsnorm_torch)
+
+
+rmsnorm = ttnn.rms_norm(input_tensor_a, weight=gamma_tensor, epsilon=1e-5)
+torch_rmsnorm_output_tensor = ttnn.to_torch(rmsnorm)
 print("torch_rmsnorm_output_tensor[0]")
 print(torch_rmsnorm_output_tensor[0][0])
+print(torch_rmsnorm_output_tensor[0][1])
 
 
 # torch_output_tensor = ttnn.to_torch(output_tensor)
@@ -95,6 +124,7 @@ wqkv_mem_config = create_dram_sharded_mem_config(K, N // 1)
 input_tensor_b = ttnn.from_torch(
     torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=wqkv_mem_config
 )
+
 
 # output_tensor = ttnn.exp(input_tensor_a)
 
@@ -155,7 +185,7 @@ torch_matmul_output_tensor = torch.matmul(rmsnorm_torch, torch_input_tensor_b)
 linear_norm_output_tensor = ttnn.linear_norm(
     input_tensor_a,
     input_tensor_b,
-    gamma=None,
+    gamma=gamma_tensor,
     epsilon=1e-5,
     program_config=program_config_fusenorm,
     # compute_kernel_config=compute_kernel_config,

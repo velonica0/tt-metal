@@ -804,11 +804,13 @@ class Attention(LightweightModule):
         print(x_11SH)
         print("self.wqkv")
         print(self.wqkv)
+        print("self.weight[weight_name_norm]")
+        print(self.weight[weight_name_norm])
         xqkv_fused = ttnn.linear_norm(
             x_11SH,
             self.wqkv,
-            # gamma=self.weight[weight_name_norm],
-            gamma=None,
+            gamma=self.weight[weight_name_norm],
+            # gamma=None,
             epsilon=self.eps,
             # dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
             # memory_config=ttnn.DRAM_MEMORY_CONFIG,

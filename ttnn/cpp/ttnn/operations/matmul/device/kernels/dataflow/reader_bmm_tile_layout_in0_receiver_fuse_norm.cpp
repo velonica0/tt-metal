@@ -34,6 +34,7 @@ void kernel_main() {
     constexpr uint32_t IGNORE_BATCH = 0x2;
 
     constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_gamma = 10;
 
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
@@ -98,6 +99,23 @@ void kernel_main() {
 
                     cb_push_back(cb_id_in0, in0_block_num_tiles);
                     DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles);" << ENDL();
+                }
+            }
+            if (bh == 0) {
+                for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                    cb_reserve_back(cb_id_gamma, in0_block_num_tiles);
+                    // Set in0 semaphore value to INVALID
+                    noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
+
+                    // Atomic increment source core counter
+                    noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
+
+                    // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
+                    noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+                    DPRINT << "noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);" << ENDL();
+
+                    cb_push_back(cb_id_gamma, in0_block_num_tiles);
+                    DPRINT << "cb_push_back(cb_id_gamma, in0_block_num_tiles);" << ENDL();
                 }
             }
         }
