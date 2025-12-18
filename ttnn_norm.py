@@ -2,31 +2,69 @@ import torch
 import ttnn
 import numpy as np
 
+def rmsnorm_no_weight(X, eps=1e-6):
+    """
+    无 weight 参数的 RMSNorm 实现。
+    输入 X 是一个二维矩阵 (R, C)。
+    """
+    # 1. 计算均方根 (RMS)
+    # X.pow(2) 计算元素平方
+    # .mean(dim=-1, keepdim=True) 对最后一个维度（列/特征维度 C）求均值，并保持维度
+    # .sqrt() 求平方根
+    rms = X.pow(2).mean(dim=-1, keepdim=True).sqrt()
+
+    # 2. 归一化：X / (rms + eps)
+    Y = X / (rms + eps)
+
+    return Y
+
 device_id = 0
 device = ttnn.open_device(device_id=device_id)
 
 M = 32 * 8
-K = 32 * 16
+K = 32 * 28
 N = 32 * 1
 
-row_values = torch.arange(1, M + 1, dtype=torch.float32).unsqueeze(1)
-torch_input_tensor_a = row_values.expand(-1, K)
-# torch_input_tensor_a = torch.rand(M, K, dtype=torch.float32)
-# torch_input_tensor_a = torch.ones(32*8*1, 32*16, dtype=torch.float32)
-# torch_input_tensor_a = torch.full((M, K), fill_value=1.0, dtype=torch.float32)
+# 1. 关闭 NumPy 打印截断（关键：让 numpy 输出全部内容）
+np.set_printoptions(
+    threshold=np.inf,  # 取消打印阈值（不截断）
+    linewidth=np.inf,  # 取消行宽限制（避免换行混乱）
+    suppress=True      # 禁用科学计数法（可选，按需开启）
+)
+
+# 2. （可选）关闭 PyTorch 张量打印截断（直接打印 torch 张量时用）
+torch.set_printoptions(
+    threshold=torch.inf,  # 取消张量打印阈值
+    linewidth=10000       # 行宽设足够大，避免换行
+)
+
+# row_values = torch.arange(1, M + 1, dtype=torch.float16).unsqueeze(1)
+# torch_input_tensor_a = row_values.expand(-1, K)
+
+# start_vals = torch.arange(1, M + 1, dtype=torch.float16).unsqueeze(1)
+# col_offsets = torch.arange(0, K, dtype=torch.float16).unsqueeze(0)
+# torch_input_tensor_a = start_vals + col_offsets
+
+torch_input_tensor_a = torch.rand(M, K, dtype=torch.float16)
+# torch_input_tensor_a = torch.full((M, K), fill_value=1.0, dtype=torch.float16)
 input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, 
     device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 output_tensor = ttnn.exp(input_tensor_a)
 torch_output_tensor = ttnn.to_torch(output_tensor)
 
+print("torch_input_tensor_a:")
+print(torch_input_tensor_a.cpu().numpy())
 
-
-# start_vals = torch.arange(1, K + 1, dtype=torch.int64).unsqueeze(1)
-# col_offsets = torch.arange(0, N, dtype=torch.int64).unsqueeze(0)
+# start_vals = torch.arange(1, K + 1, dtype=torch.float16).unsqueeze(1)
+# col_offsets = torch.arange(0, N, dtype=torch.float16).unsqueeze(0)
 # torch_input_tensor_b = start_vals + col_offsets
-# torch_input_tensor_b = torch.rand(K, N, dtype=torch.float32)
-# torch_input_tensor_b = torch.ones(32*1, 32*1, dtype=torch.float32)
-torch_input_tensor_b = torch.full((K, N), fill_value=2.0, dtype=torch.float32)
+
+# total_elems = K * N
+# continuous_seq = torch.arange(1, total_elems + 1, dtype=torch.float16)
+# torch_input_tensor_b = continuous_seq.reshape(K, N)
+
+torch_input_tensor_b = torch.rand(K, N, dtype=torch.float16)
+# torch_input_tensor_b = torch.full((K, N), fill_value=1.0, dtype=torch.float16)
 input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, 
     device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -46,7 +84,7 @@ program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 
 program_config_fusenorm=ttnn.MatmulMultiCoreReuseMultiCastProgramConfigFuseNorm(
     compute_with_storage_grid_size=(8, 8),
-    in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+    in0_block_w=4,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
     out_subblock_h=1,  # Must be divisible by per_core_M
     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
     per_core_M=8,
@@ -132,19 +170,17 @@ compute_kernel_config = ttnn.init_device_compute_kernel_config(
 # (17)0  
 # (18)0  
 
-# # 1. 关闭 NumPy 打印截断（关键：让 numpy 输出全部内容）
-# np.set_printoptions(
-#     threshold=np.inf,  # 取消打印阈值（不截断）
-#     linewidth=np.inf,  # 取消行宽限制（避免换行混乱）
-#     suppress=True      # 禁用科学计数法（可选，按需开启）
-# )
+norm_torch_tensor = rmsnorm_no_weight(torch_input_tensor_a)
+torch_matmul_output_tensor = torch.matmul(norm_torch_tensor, torch_input_tensor_b)
 
-# # 2. （可选）关闭 PyTorch 张量打印截断（直接打印 torch 张量时用）
-# torch.set_printoptions(
-#     threshold=torch.inf,  # 取消张量打印阈值
-#     linewidth=10000       # 行宽设足够大，避免换行
-# )
-
+norm_output_tensor = ttnn.rms_norm(input_tensor_a, epsilon=1e-5, compute_kernel_config=compute_kernel_config)
+liner_output_tensor = ttnn.linear(norm_output_tensor, input_tensor_b, program_config=program_config)
+torch_norm_output_tensor = ttnn.to_torch(norm_output_tensor).to(dtype=torch.float32)
+print("torch_norm_output_tensor:")
+print(torch_norm_output_tensor.cpu().numpy())
+torch_linear_output_tensor = ttnn.to_torch(liner_output_tensor).to(dtype=torch.float32)
+print("torch_linear_output_tensor:")
+print(torch_linear_output_tensor.cpu().numpy())
 
 linear_norm_output_tensor = ttnn.linear_norm(
     input_tensor_a, 
@@ -153,17 +189,9 @@ linear_norm_output_tensor = ttnn.linear_norm(
     epsilon=1e-5,
     program_config=program_config_fusenorm,
     compute_kernel_config=compute_kernel_config)
-
-norm_output_tensor = ttnn.rms_norm(input_tensor_a, epsilon=1e-5, compute_kernel_config=compute_kernel_config)
-liner_output_tensor = ttnn.linear(norm_output_tensor, input_tensor_b, program_config=program_config)
-
-# torch_norm_output_tensor = ttnn.to_torch(norm_output_tensor).to(dtype=torch.float32)
-# print(torch_norm_output_tensor.cpu().numpy())
-torch_liner_output_tensor = ttnn.to_torch(liner_output_tensor).to(dtype=torch.float32)
-# print(torch_liner_output_tensor.cpu().numpy())
-
 torch_linear_norm_output_tensor = ttnn.to_torch(linear_norm_output_tensor).to(dtype=torch.float32)
-# print(torch_linear_norm_output_tensor.cpu().numpy())
+print("torch_linear_norm_output_tensor:")
+print(torch_linear_norm_output_tensor.cpu().numpy())
 
 
 ttnn.close_device(device)
@@ -223,10 +251,10 @@ def comp_pcc(golden, calculated, pcc=0.99):
     
     return cal_pcc >= pcc, cal_pcc
     
-# --- 示例用法 ---# 假设我们有两个 3x4 的二维 Tensor# 计算并打印结果
-# passing, pcc_message = comp_pcc(torch_matmul_output_tensor, torch_linear_norm_output_tensor)
-# print(f"me and torch PCC: {pcc_message}")
-passing, pcc_message = comp_pcc(torch_liner_output_tensor, torch_linear_norm_output_tensor)
+
+passing, pcc_message = comp_pcc(torch_matmul_output_tensor, torch_linear_norm_output_tensor)
+print(f"me and torch PCC: {pcc_message}")
+passing, pcc_message = comp_pcc(torch_linear_output_tensor, torch_linear_norm_output_tensor)
 print(f"me and tt PCC: {pcc_message}")
-# passing, pcc_message = comp_pcc(torch_linear_output_tensor, torch_matmul_output_tensor)
-# print(f"tt and torch PCC: {pcc_message}")
+passing, pcc_message = comp_pcc(torch_linear_output_tensor, torch_matmul_output_tensor)
+print(f"tt and torch PCC: {pcc_message}")

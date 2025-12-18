@@ -116,8 +116,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1_fuse_
         in0_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
-    uint32_t in1_block_tiles = out_block_w * in0_block_w;
-    uint32_t in1_CB_tiles = in1_block_tiles;
+    // uint32_t in1_block_tiles = out_block_w * in0_block_w;
+    // uint32_t in1_CB_tiles = in1_block_tiles;
+    uint32_t in1_CB_tiles = K;  // 内积矩阵乘，读取整列
     if (B * num_blocks > 1) {
         in1_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }

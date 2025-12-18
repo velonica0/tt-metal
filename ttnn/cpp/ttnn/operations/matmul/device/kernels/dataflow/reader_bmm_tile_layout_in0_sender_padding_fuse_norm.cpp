@@ -52,6 +52,7 @@ void kernel_main() {
     constexpr uint32_t eps_cb_id = 11;
     const uint32_t eps = get_arg_val<uint32_t>(rt_args_idx++);
     generate_bcast_col_scalar(eps_cb_id, eps);
+    DPRINT << "in0 eps=" << eps << ENDL();
     uint32_t gamma_addr = get_arg_val<uint32_t>(rt_args_idx++);
     // uint32_t beta_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
@@ -156,10 +157,10 @@ void kernel_main() {
         in0_mcast_dest_noc_end_x,
         in0_mcast_dest_noc_end_y,
         in0_mcast_receiver_semaphore_addr);
-    DPRINT << "in0_mcast_dest_noc_start_x:" << in0_mcast_dest_noc_start_x << ENDL();
-    DPRINT << "in0_mcast_dest_noc_start_y:" << in0_mcast_dest_noc_start_y << ENDL();
-    DPRINT << "in0_mcast_dest_noc_end_x:" << in0_mcast_dest_noc_end_x << ENDL();
-    DPRINT << "in0_mcast_dest_noc_end_y:" << in0_mcast_dest_noc_end_y << ENDL();
+    // DPRINT << "in0_mcast_dest_noc_start_x:" << in0_mcast_dest_noc_start_x << ENDL();
+    // DPRINT << "in0_mcast_dest_noc_start_y:" << in0_mcast_dest_noc_start_y << ENDL();
+    // DPRINT << "in0_mcast_dest_noc_end_x:" << in0_mcast_dest_noc_end_x << ENDL();
+    // DPRINT << "in0_mcast_dest_noc_end_y:" << in0_mcast_dest_noc_end_y << ENDL();
 
     const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);
@@ -210,14 +211,14 @@ void kernel_main() {
 //             }
 
 
-            DPRINT << "num_blocks_h_dim=" << num_blocks_h_dim << "num_blocks_w_dim=" << num_blocks_w_dim << "num_blocks_inner_dim=" << num_blocks_inner_dim << ENDL();
+            // DPRINT << "num_blocks_h_dim=" << num_blocks_h_dim << "num_blocks_w_dim=" << num_blocks_w_dim << "num_blocks_inner_dim=" << num_blocks_inner_dim << ENDL();
 
             uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
             for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {    //per_core_M / out_block_h
                 //for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {    //per_core_N / out_block_w
                     uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
                     // 对应 for (uint32_t wt = 0; wt < Wt; wt += blk)
-                    DPRINT << "num_blocks_inner_dim:" << num_blocks_inner_dim <<" bh:" << bh << ENDL();
+                    // DPRINT << "num_blocks_inner_dim:" << num_blocks_inner_dim <<" bh:" << bh << ENDL();
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {//K / in0_block_w
                         // if constexpr (fuse_op) {
                         //     fused_op_receiver.update_current_block_start_tile_id(
@@ -226,7 +227,7 @@ void kernel_main() {
 
                         // Operand 0
                         // Common for sharded and interleaved paths
-                        DPRINT << "cb_reserve_back(cb_id_in0, in0_block_num_tiles);" << ", cb_id_in0:" << static_cast<uint32_t>(cb_id_in0) << ", in0_block_num_tiles:" << in0_block_num_tiles << ENDL(); 
+                        // DPRINT << "cb_reserve_back(cb_id_in0, in0_block_num_tiles);" << ", cb_id_in0:" << static_cast<uint32_t>(cb_id_in0) << ", in0_block_num_tiles:" << in0_block_num_tiles << ENDL(); 
                         cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
 
@@ -270,7 +271,7 @@ void kernel_main() {
 
                         // Barrier! make sure the reads are done
                         noc_async_read_barrier();
-                        DPRINT << "reader in0 a block, bh:" << bh << ", block:" << block << ENDL();
+                        // DPRINT << "reader in0 a block, bh:" << bh << ", block:" << block << ENDL();
 
 // #ifndef SKIP_MCAST
 //                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
@@ -303,13 +304,13 @@ void kernel_main() {
 // #endif  // SKIP_MCAST
          
                         // Common for sharded and interleaved paths
-                        DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles);" << "in0_block_num_tiles=" << in0_block_num_tiles << ENDL();
+                        // DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles);" << "in0_block_num_tiles=" << in0_block_num_tiles << ENDL();
                         cb_push_back(cb_id_in0, in0_block_num_tiles);
-                        DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles); END END END"  << ENDL();
+                        // DPRINT << "cb_push_back(cb_id_in0, in0_block_num_tiles); END END END"  << ENDL();
 
 
                     }
-                    DPRINT << "num_blocks_h_dim=" << num_blocks_h_dim << "num_blocks_w_dim=" << num_blocks_w_dim << "num_blocks_inner_dim=" << num_blocks_inner_dim << ENDL();
+                    // DPRINT << "num_blocks_h_dim=" << num_blocks_h_dim << "num_blocks_w_dim=" << num_blocks_w_dim << "num_blocks_inner_dim=" << num_blocks_inner_dim << ENDL();
                     DPRINT << "reader_bmm_tile_layout_in0_sender_padding_fuse_norm complete-4" << ENDL();
                 //}
                 in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;//K
