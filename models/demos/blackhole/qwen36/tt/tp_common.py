@@ -1,11 +1,21 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP helpers for Qwen3.5/3.6 on Blackhole (9B single-device + 27B TP=4 / TP=8).
+"""TP helpers for Qwen3.5/3.6/3.8 on Blackhole (9B single-device + 27B TP=4 / TP=8) and
+Wormhole T3K (27B TP=8).
 
 Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
+
+Arch differences this file absorbs (everything else reads the device grid at runtime):
+  * worker grid: BH P150 exposes 11x10, WH 8x8. Fused CCL matmuls place their mux / RS worker
+    cores in the bottom rows of the FULL device grid, so their matmul grids are sized from it
+    (``agmm_prefill_grid`` / ``mmrs_prefill_grid``) instead of the BH-tuned constants.
+  * ethernet links: P150x4/x8 have 2 per direction, T3K has 1 (``ccl_num_links``).
+  * DRAM banks: BH has 8, WH has 12 (``dram_cores``); only the (non-default) DRAM-sharded
+    weight path depends on it.
 """
 import math
+import os
 
 import torch
 
@@ -14,23 +24,128 @@ from models.common.utility_functions import is_blackhole
 
 # Hardware constants
 TILE_SIZE = 32
+# Blackhole DRAM bank count; the validated BH default. Wormhole has 12 — see dram_cores().
 DRAM_CORES = 8
-DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(DRAM_CORES - 1, 0))})
+
+
+def dram_cores(mesh_device=None):
+    """DRAM bank count for the DRAM-WIDTH_SHARDED weight configs (8 on BH, 12 on WH)."""
+    if mesh_device is None:
+        return DRAM_CORES
+    return mesh_device.dram_grid_size().x
+
+
+def _dram_grid(n_cores):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_cores - 1, 0))})
+
+
+DRAM_GRID = _dram_grid(DRAM_CORES)
+
+
+def ccl_num_links(tt_ccl, cluster_axis=1, max_links=2):
+    """Ethernet links the fused CCL matmuls may use: min(max_links, links on this mesh axis).
+    P150x4/x8 -> 2 (the tuned BH value), T3K -> 1."""
+    try:
+        n = tt_ccl.get_num_links(cluster_axis)
+    except Exception:
+        n = max_links
+    return max(1, min(max_links, n))
+
+
+def _full_grid(tt_ccl):
+    return tt_ccl.mesh_device.compute_with_storage_grid_size()
+
+
+def agmm_prefill_grid(tt_ccl, rows=9):
+    """Matmul grid for all_gather_minimal_matmul_async (force_transpose): 8 wide, and short enough to
+    leave the bottom row of the FULL device grid free -- the op parks its in0 muxes at
+    (x, full_grid.y - 1). BH P150 (y=10): (8,9), the tuned value. WH (y=8): (8,7)."""
+    g = _full_grid(tt_ccl)
+    return (8, min(rows, g.y - 1))
+
+
+def mmrs_prefill_grid(tt_ccl, rows=8):
+    """Matmul grid for the prefill matmul_reduce_scatter_async: 8 wide, leaving 2 rows below it for the
+    RS workers (offset = grid.y). BH (y=10): (8,8) rows 8-9; WH (y=8): (8,6) rows 6-7."""
+    g = _full_grid(tt_ccl)
+    return (8, min(rows, g.y - 2))
 
 
 # Compute kernel configs
+#
+# Wormhole di/dt throttle. A full-grid (64-core) fp32 matmul launched simultaneously on all 8 chips of
+# a T3K draws a current step the board regulator cannot follow; the droop corrupts Tensix state on the
+# cores that are marginal for it (always the same few, e.g. device 2 (6-7,3)), leaving the unpack/math
+# handshake desynchronised. The kernel finishes, but the next op needing SrcB -- any eltwise binary, or
+# the next matmul -- deadlocks at UABD/MWDD and the mesh needs tt-smi -r. Measured on this T3K, 1x8,
+# fresh process per run: stock 11/11 hang; matmul throttle (any level 1-5, which pads the MVMUL stream
+# with NOPs) 12/12 pass; <=32 cores 3/3 pass; all-zero inputs (same instructions and timing, a fraction
+# of the switching power) 5/5 pass; a 3 s gap, an intervening unary op, or a different tensor do not
+# help. The machine also fails Tenstorrent's own di/dt qualification test
+# (tests/didt/test_ff1_matmul.py -k "8chips"), so this is a platform limit rather than a kernel bug;
+# see tt-metal #24488 for other T3Ks in the same state. LEVEL_1 (~73% of peak math rate) is the
+# cheapest setting that held; QWEN36_MM_THROTTLE overrides it (0 = off, 1-5 = level) for machines with
+# more power margin. The host applies it only to matmuls above 48 cores, so decode is unaffected.
+#
+# packer_l1_acc stays off on WH for the same reason (fp32 L1 accumulation adds pack traffic and power
+# on exactly these matmuls); it is a power reduction, not a correctness workaround.
+def _wh_throttle_level():
+    if is_blackhole():
+        return ttnn.ThrottleLevel.NO_THROTTLE
+    lvl = int(os.environ.get("QWEN36_MM_THROTTLE", "1"))
+    return {
+        0: ttnn.ThrottleLevel.NO_THROTTLE,
+        1: ttnn.ThrottleLevel.LEVEL_1,
+        2: ttnn.ThrottleLevel.LEVEL_2,
+        3: ttnn.ThrottleLevel.LEVEL_3,
+        4: ttnn.ThrottleLevel.LEVEL_4,
+        5: ttnn.ThrottleLevel.LEVEL_5,
+    }[lvl]
+
+
+MM_THROTTLE_LEVEL = _wh_throttle_level()
+
 COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=True,
     fp32_dest_acc_en=True,
-    packer_l1_acc=True,
+    packer_l1_acc=is_blackhole(),
+    throttle_level=MM_THROTTLE_LEVEL,
 )
+
+
+def prefill_matmul_compute_cfg(cfg):
+    """A caller-supplied compute config with the Wormhole di/dt settings applied (see above):
+    packer_l1_acc cleared and the matmul throttle level set. Returns cfg unchanged on Blackhole."""
+    if is_blackhole():
+        return cfg
+    if not getattr(cfg, "packer_l1_acc", False) and cfg.throttle_level == MM_THROTTLE_LEVEL:
+        return cfg
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=cfg.math_fidelity,
+        math_approx_mode=cfg.math_approx_mode,
+        fp32_dest_acc_en=cfg.fp32_dest_acc_en,
+        packer_l1_acc=False,
+        throttle_level=MM_THROTTLE_LEVEL,
+    )
 
 
 # Grid helpers
 def prefill_grid_default():
     """BH P150: (8,10); WH: (8,8). y capped at 10 on BH (grid_x=10 breaks matmul)."""
     return (8, 10) if is_blackhole() else (8, 8)
+
+
+def prefill_matmul_out_memcfg():
+    """Placement of the tuned 2D prefill matmul OUTPUTS (attn wo, MLP down; see the callers).
+
+    On Blackhole the L1-resident output is a measured win (test_mlp_matmul_sweep_prefill *_outL1):
+    the ~110-core grid keeps each core's share of a [2048, 5120] bf16 output near 200 KB next to
+    the matmul CBs. Wormhole has 64 cores, so per_core_M/N grow ~1.7x and the same config's CBs
+    (in0/in1 double-buffered + bf16 out + fp32 interm) already end at ~1.39 MB of the 1.46 MB L1 --
+    an L1 output then clashes ("Statically allocated circular buffers ... clash with L1 buffers",
+    observed at S=2048 on a T3K). DRAM output is the correct-first choice there; re-tune later."""
+    return ttnn.L1_MEMORY_CONFIG if is_blackhole() else ttnn.DRAM_MEMORY_CONFIG
 
 
 # Max grid COLUMNS a tuned prefill config may use. A Blackhole galaxy reports a 12-wide worker
@@ -93,12 +208,12 @@ def _find_grid(n_tiles, target=32):
 
 
 # DRAM-sharded config builders
-def create_dram_sharded_mem_config(k, n):
-    """WIDTH_SHARDED DRAM memory config for a weight matrix [k, n]."""
-    padded_n = _roundup(n, TILE_SIZE * DRAM_CORES)
+def create_dram_sharded_mem_config(k, n, n_dram_cores=DRAM_CORES):
+    """WIDTH_SHARDED DRAM memory config for a weight matrix [k, n], one shard per DRAM bank."""
+    padded_n = _roundup(n, TILE_SIZE * n_dram_cores)
     shard_spec = ttnn.ShardSpec(
-        DRAM_GRID,
-        (k, padded_n // DRAM_CORES),
+        _dram_grid(n_dram_cores),
+        (k, padded_n // n_dram_cores),
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     return ttnn.MemoryConfig(
@@ -108,11 +223,11 @@ def create_dram_sharded_mem_config(k, n):
     )
 
 
-def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
+def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None, n_dram_cores=DRAM_CORES):
     """DRAM-sharded matmul program config (decode, small M)."""
     m_tiles = math.ceil(m / TILE_SIZE)
     k_tiles = math.ceil(k / TILE_SIZE)
-    n_padded = _roundup(n, TILE_SIZE * DRAM_CORES)
+    n_padded = _roundup(n, TILE_SIZE * n_dram_cores)
     n_tiles = n_padded // TILE_SIZE
 
     if num_cores is None:
@@ -177,7 +292,10 @@ def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_confi
         program_config=decode_1d_progcfg,
         memory_config=out_memory_config,
     )
-    if x_il is not x:
+    # to_memory_config is a no-op when x is already L1-interleaved, but it hands back a NEW Python
+    # object on the SAME buffer -- `x_il is not x` does not detect that, and freeing it frees the
+    # caller's x (the caller then double-frees: "Tensor is not allocated"). Compare buffers instead.
+    if x_il.buffer_address() != x.buffer_address():
         ttnn.deallocate(x_il)
     return out
 
@@ -211,11 +329,48 @@ def _full_grid_crs(grid):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
 
+# L1 the 2D prefill matmul's static CBs may take. The kernel double-buffers in0 (out_block_h x
+# in0_block_w) and in1 (in0_block_w x out_block_w) in bf16 and holds the out block once in bf16 and
+# once as the fp32 accumulator, so everything scales with the out block. WH reports 1499136 B of
+# L1; keep ~250 KB for the other L1 tenants a layer has live (norm output, resident activations).
+_PREFILL_MM_CB_BUDGET = 1_250_000
+_TILE_BF16, _TILE_FP32 = 2048, 4096
+
+
+def _prefill_mm_cb_bytes(out_block_h, out_block_w, in0_block_w):
+    return 2 * (out_block_h * in0_block_w + in0_block_w * out_block_w) * _TILE_BF16 + out_block_h * out_block_w * (
+        _TILE_BF16 + _TILE_FP32
+    )
+
+
+def _fit_out_block(per_core_M, per_core_N, in0_block_w, out_subblock_w, budget=_PREFILL_MM_CB_BUDGET):
+    """Largest (out_block_h, out_block_w) dividing the per-core block whose CBs fit ``budget``.
+
+    On BH's ~110-core grid every tuned prefill shape fits at the full per-core block, so this returns
+    (per_core_M, per_core_N) there and the program configs are unchanged. On WH's 64 cores the per-core
+    block is ~1.7x larger: the MLP down-proj at S=2304 (9x20 tiles, in0_block_w 4) needs 1533 KB of
+    CBs > the 1464 KB L1 ("Statically allocated circular buffers ... beyond max L1 size"). Shrinking
+    the out block (h first -- it keeps the subblock width) fixes that at a small reuse cost."""
+    obh, obw = per_core_M, per_core_N
+    while _prefill_mm_cb_bytes(obh, obw, in0_block_w) > budget:
+        smaller_h = [d for d in range(obh - 1, 0, -1) if per_core_M % d == 0]
+        if smaller_h:
+            obh = smaller_h[0]
+            continue
+        smaller_w = [d for d in range(obw - 1, 0, -1) if per_core_N % d == 0 and d % out_subblock_w == 0]
+        if smaller_w:
+            obw = smaller_w[0]
+            continue
+        break
+    return obh, obw
+
+
 def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None, tuning=None):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
     fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg.
-    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior."""
+    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior.
+    The out block is shrunk below the per-core block only when the CBs would not fit L1 (WH)."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
@@ -234,6 +389,10 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     else:
         in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
 
+    out_block_h, out_block_w = _fit_out_block(per_core_M, per_core_N, in0_block_w, out_subblock_w)
+    kw = {}
+    if (out_block_h, out_block_w) != (per_core_M, per_core_N):
+        kw = dict(out_block_h=out_block_h, out_block_w=out_block_w)
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
@@ -244,6 +403,7 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
         transpose_mcast=False,
         fused_activation=fused_activation,
         fuse_batch=False,
+        **kw,
     )
 
 
@@ -356,8 +516,9 @@ def all_gather_matmul_prefill(
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
     # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
     # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
-    num_links = 2
-    grid = (8, grid[1])
+    # T3K has 1 link per direction -> 1 link, 8 workers. Rows come from the device grid (mux row).
+    num_links = ccl_num_links(tt_ccl, cluster_axis)
+    grid = agmm_prefill_grid(tt_ccl, grid[1])
     workers = grid[0] // num_links
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=4,
@@ -400,8 +561,8 @@ def all_gather_swiglu_prefill(
     x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
-    num_links = 2
-    grid = (8, grid[1])
+    num_links = ccl_num_links(tt_ccl, cluster_axis)
+    grid = agmm_prefill_grid(tt_ccl, grid[1])
     workers = grid[0] // num_links
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=8,
@@ -520,20 +681,25 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
     return cache[key]
 
 
-def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):
+def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=None):
     """Fused row-parallel out-proj matmul + reduce-scatter for PREFILL (matmul_reduce_scatter_async).
 
     Unlike decode (M=1, where the 2D matmul collapses to ~8 cores and this loses), at prefill M>>1 the
     2D matmul fills the grid, so overlapping the RS with the matmul is a WIN (biggest for the fp32
-    GDN-out with its large RS). grid=(8,8): matmul rows 0-7, RS workers rows 8-9. x: K-sharded
-    [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared buffer survives)."""
+    GDN-out with its large RS). grid=(8,8) on BH: matmul rows 0-7, RS workers rows 8-9; on WH the
+    grid shrinks to (8,6) with the RS workers on rows 6-7 (mmrs_prefill_grid). rs_offset defaults to
+    (0, grid.y). x: K-sharded [.,M,K_local]; weight [K_local,N]. Returns [1,1,M,N/nd] (cloned; shared
+    buffer survives)."""
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
     x4 = ttnn.reshape(x, (1, 1, M, K_local))
     # RS-bound: 2 ethernet links parallelize the fp32 cross-device reduce (P150x4 max; traced_8k win).
-    # grid (8,8) leaves rows 8-9 for the 2 RS worker rows.
-    num_links = 2
+    # grid (8,8) leaves rows 8-9 for the 2 RS worker rows. T3K: 1 link, 10 RS cores -> 2 rows on WH.
+    num_links = ccl_num_links(tt_ccl)
+    grid = mmrs_prefill_grid(tt_ccl, grid[1])
+    if rs_offset is None:
+        rs_offset = (0, grid[1])
     per_core_N = max(1, math.ceil(N / TILE_SIZE / grid[0]))
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
@@ -565,7 +731,8 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
         subdevice_id=None,
         memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
         program_config=pc,
-        compute_kernel_config=compute_cfg,
+        # Same 2D-mcast compute kernel as the tuned prefill matmuls: no packer L1 acc on WH.
+        compute_kernel_config=prefill_matmul_compute_cfg(compute_cfg),
     )
     return ttnn.clone(rs, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -603,7 +770,11 @@ def sharded_decode_matmul(
         return ttnn.to_memory_config(out, decode_out_memory_config)
     pc = prefill_progcfg_fn(seq, prefill_k, weight.shape[-1])
     return ttnn.linear(
-        x, weight, compute_kernel_config=compute_cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x,
+        weight,
+        compute_kernel_config=prefill_matmul_compute_cfg(compute_cfg),
+        program_config=pc,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
 

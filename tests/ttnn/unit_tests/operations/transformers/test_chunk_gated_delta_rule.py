@@ -59,7 +59,6 @@ def _const_tiles(device, chunk_size=CHUNK):
     return (_up(eye), _up(tril), _up(ones), _up(masks))
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="phased chunk_gated_delta_rule is Blackhole-only")
 @pytest.mark.parametrize(
     "batch, num_k_heads, num_v_heads, key_dim, val_dim",
     [
@@ -206,7 +205,6 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
 # The last three rows are the branches the shared-input transfer counts actually differ on --
 # K != V changes the ck/kc counts, chunk_size=64 makes Ct=2, and T == chunk_size makes NC==1 a
 # single-chunk handshake with no steady state. All three are supported and verified bit-exact.
-@pytest.mark.skipif(not is_blackhole(), reason="phased chunk_gated_delta_rule is Blackhole-only")
 @pytest.mark.parametrize(
     "batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, chunk, want_mcast",
     [
@@ -214,7 +212,20 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
         (1, 16, 48, 128, 128, 256, 32, True),  # single-device Qwen3.6 shape: BH=48 -> NV=2, fan-out 1
         (2, 16, 48, 128, 128, 256, 32, False),  # batched prefill: BH=96 -> NV=1, degenerates to plain reader
         (1, 4, 12, 64, 128, 256, 32, True),  # K != V: kd/q_decay/k_dec_t shrink, v_beta does not
-        (1, 4, 12, 128, 128, 256, 64, True),  # chunk_size=64 -> Ct=2: two tile-rows per chunk
+        pytest.param(
+            1,
+            4,
+            12,
+            128,
+            128,
+            256,
+            64,
+            True,
+            # chunk_size=64 -> Ct=2: two tile-rows per chunk. The Ct=2 prep kernel binary (73376 B)
+            # exceeds Wormhole's kernel-config ring buffer (70656 B); the model only runs Ct=1
+            # (chunk_size=32, fused_chunk.py), so this variant stays Blackhole-only.
+            marks=pytest.mark.skipif(not is_blackhole(), reason="Ct=2 prep kernel exceeds the WH kernel config buffer"),
+        ),
         (1, 4, 12, 128, 128, 32, 32, True),  # T == chunk_size -> NC==1: single-chunk handshake
         (1, 4, 12, 128, 64, 256, 32, True),  # small V: Ct*Vt < 3, the prep mask-slot capacity regime
     ],

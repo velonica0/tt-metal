@@ -20,5 +20,6 @@
   "test_deltanet_pcc": 0.99,
   "test_mlp_pcc": 0.98,
   "test_lm_head_precision": 0.999,
-  "test_embedding_pcc": 0.999
+  "test_embedding_pcc": 0.999,
+  "test_model_tp_matches_hf": 0.97
 }

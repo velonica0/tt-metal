@@ -1,7 +1,7 @@
-# Qwen3.5 / Qwen3.6 on Blackhole
+# Qwen3.5 / Qwen3.6 / Qwen3.8 on Blackhole (and Wormhole T3K)
 
-This directory implements Tenstorrent Blackhole inference for the hybrid
-**Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6 family. The same code path serves three checkpoints:
+This directory implements Tenstorrent inference for the hybrid
+**Gated DeltaNet + Gated Full Attention** Qwen3.5/3.6/3.8 family. The same code path serves these checkpoints:
 
 | Model            | `HF_MODEL`             | Mesh / `MESH_DEVICE` | Parallelism            |
 | ---------------- | ---------------------- | -------------------- | ---------------------- |
@@ -9,6 +9,11 @@ This directory implements Tenstorrent Blackhole inference for the hybrid
 | Qwen3.5-27B      | `Qwen/Qwen3.5-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
 | Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
 | Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | P150x8 — `P150x8`    | 8-way tensor parallel  |
+| Qwen3.8-27B      | `Qwen/Qwen3.8-27B`     | P150x4 / P150x8      | 4- / 8-way tensor parallel |
+| Qwen3.6/3.8-27B  | `Qwen/Qwen3.8-27B`     | Wormhole T3K — `T3K` | 8-way tensor parallel  |
+
+Qwen3.8-27B (`Qwen3_5ForConditionalGeneration`, `model_type: qwen3_5`) has the same config and
+tensor layout as Qwen3.6-27B, so it needs no model-side changes — only `HF_MODEL`.
 
 - The **9B** runs on a **single Blackhole P150** device. It uses the validated
   single-device forward path (no collectives).
@@ -64,10 +69,70 @@ export HF_MODEL=Qwen/Qwen3.5-27B
 export MESH_DEVICE=P150x4
 ```
 
+**27B on a Wormhole T3K (8 chips, TP=8):**
+
+```bash
+export HF_MODEL=Qwen/Qwen3.8-27B   # or Qwen/Qwen3.6-27B
+export MESH_DEVICE=T3K
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
+
 `HF_MODEL` is the single source of truth for the checkpoint — it may be a Hugging
 Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
 `MESH_DEVICE` selects the mesh shape (`P150` → `(1,1)`, `P150x4` → `(1,4)`,
-`P150x8` → `(1,8)`).
+`P150x8` / `T3K` → `(1,8)`, `N300` → `(1,2)`; see `tests/test_factory.py::MESH_SHAPES`).
+
+### Wormhole notes
+
+The model code reads the worker grid, DRAM bank count and ethernet link count from the device,
+so the T3K needs no separate configs (`tt/tp_common.py` documents the arch differences). Two
+things differ from Blackhole:
+
+* T3K has 12 GB DRAM per chip, so the 27B needs the full 8-chip mesh (TP=8, KV heads replicated
+  across device pairs exactly as on P150x8). `N300` (`(1,2)`) is mapped for completeness but the
+  27B does not fit on it.
+* The tuned prefill matmul outputs (attention `wo`, MLP `down`) are DRAM- rather than L1-resident
+  on Wormhole (`tp_common.prefill_matmul_out_memcfg`): the 64-core grid leaves no L1 next to the
+  matmul's circular buffers at S=2048. This is a correctness-first choice; nothing has been
+  perf-tuned for Wormhole yet.
+
+Measured on a T3K (2026-09-21, nothing perf-tuned for Wormhole yet):
+
+| Checkpoint | `test_model_tp.py` | `text_demo.py` | vs HF fp32 (`test_model_tp_hf_reference.py`) |
+| --- | --- | --- | --- |
+| Qwen3.5-0.8B | 11/11 | 55 tok/s B=1, 359 tok/s B=8, TTFT 11.7 s @ 103k | per-step PCC 0.97-0.995 (bfp4 gate/up), 0.99-0.9994 (bfp8) |
+| Qwen3.8-27B | 10/11 (see below) | 17 tok/s B=1, 106 tok/s B=8, TTFT 1.4 s @ 2.6k | per-step PCC 0.995-0.998; `test_generate_tp`: "The capital of France is **Paris**." |
+
+Known issue (Wormhole T3K only): an **intermittent device hang** in the eager (non-traced) prefill
+paths. Root-caused far enough to hand to tt-metal (2026-09-22):
+
+* Mechanism: after a 2D-multicast matmul (`bmm_large_block_zm_fused_bias_activation`, the kernel behind
+  the tuned prefill program configs and behind `ttnn.linear` auto configs at prefill sizes), a few Tensix
+  cores are left with the unpack/math handshake desynchronised — the watcher shows the *next* compute
+  kernel on those cores parked at `UABD`/`MWDD` (unpack "done", math still waiting for source data).
+  Any following binary eltwise op (e.g. the residual `add`) deadlocks on those cores; unary ops still run.
+  With dispatch to the remote chips going over the fabric, the stalled program fills the fetch queue and
+  the host spins in `fetch_queue_reserve_back`. Recover with `tt-smi -r`.
+* Isolated reproducer (`~/like/matmul_probe.py` on the box, no model): M=2048, K=768, N=5120, 8x8 grid,
+  per-core 8x20, `in0_block_w=4`, subblock 1x4, `out_block_h=4`, fp32 dest acc — followed by
+  `ttnn.add`. Hangs 5/5 on the 1x8 mesh with `packer_l1_acc=True`, 0/5 with it off; **never** on a
+  single chip (all 8 tested individually), 1x1+fabric, 1x2 or 1x4 — only on the full 8-chip mesh
+  (1x8 and 2x4), i.e. a launch-timing race. Changing any one of `in0_block_w`, `out_block_h` or
+  `out_subblock_w` also changes the hit rate (4/5 → 1/5 → 0/10 over 5-10 cold runs each).
+* Model-level mitigation applied: `tp_common.COMPUTE_HIFI2` drops `packer_l1_acc` on Wormhole (the MLP
+  already ran without it). This removes the isolated reproducer but **does not eliminate the hang in the
+  full model** — it moves between call sites/tests as configs or the test order change, and it was seen
+  once in a fresh session. The traced, warmed-up served path (`text_demo.py`, vLLM) has never hung in
+  any run; `test_model_tp.py` hangs in one of its eager cases most sessions.
+* Not fixable in the model: needs an LLK/kernel-exit fix in tt-metal. Adjacent upstream reports:
+  tenstorrent/tt-metal#53823 (WH eltwise-binary unpack-sync race), #55664 (FP32 dest-acc TRISC
+  handshake ordering).
+
+Component tests can run before the checkpoint is downloaded: point `HF_MODEL` at a directory
+holding only `config.json` + tokenizer files (or set `QWEN36_SYNTHETIC_WEIGHTS=1`) and the TP
+tests synthesize random weights of the right shapes for both the device path and the torch
+reference (`tests/test_factory.py::synthetic_weights_enabled`). The full-model tests need the
+real checkpoint.
 
 Optional flags:
 

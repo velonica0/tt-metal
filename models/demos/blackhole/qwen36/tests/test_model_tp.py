@@ -515,15 +515,25 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
     ]
     batched_dec = [[] for _ in range(B)]
     pos = list(prompt_lens)
-    fed = [int(torch.argmax(batched_pf[u])) for u in range(B)]
-    for _ in range(N_DEC):
+    # Teacher-force the ORACLE's tokens (argmax of its prefill, then of its own decode logits) so
+    # every decode step compares logits under identical inputs. Feeding each path its own argmax
+    # lets a near-tie flip at decode0 (random-token prompts have flat distributions) legitimately
+    # diverge decode1 and read as a spurious PCC failure -- the same reason test_model_tp_contract
+    # teacher-forces. The batched argmax is still logged so a flip is visible.
+    fed = [int(torch.argmax(oracle_pf[u])) for u in range(B)]
+    own = [int(torch.argmax(batched_pf[u])) for u in range(B)]
+    for s in range(N_DEC):
+        flips = [u for u in range(B) if own[u] != fed[u]]
+        if flips:
+            logger.info(f"decode{s}: batched argmax differs from oracle for users {flips} (teacher-forced)")
         tokens_step = torch.tensor([[fed[u]] for u in range(B)], dtype=torch.int32)
         dev = bmodel.prepare_inputs_decode(tokens_step, torch.tensor(pos, dtype=torch.int32), bpt)
         out, _ = bmodel.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
         ls = bmodel.process_output_decode(out, B)
         for u in range(B):
             batched_dec[u].append(ls[u, 0, :vocab].float())
-            fed[u] = int(torch.argmax(ls[u, 0, :vocab]))
+            own[u] = int(torch.argmax(ls[u, 0, :vocab]))
+            fed[u] = int(torch.argmax(oracle_dec[u][s]))
         pos = [p + 1 for p in pos]
     bmodel.free_kv_caches()
     del bmodel

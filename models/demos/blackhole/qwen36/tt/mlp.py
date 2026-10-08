@@ -20,6 +20,17 @@ class MLPWeights:
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
 
 
+def gateup_weight_dtype():
+    """gate/up (w1/w3 and the packed prefill copy) weight dtype: bfp4 by default (the validated,
+    fastest config). QWEN36_MLP_GATEUP_DTYPE=bfp8 trades ~2x MLP weight DRAM for accuracy -- useful
+    to separate quantization error from a real numerics bug when validating against HF."""
+    return ttnn.bfloat8_b if os.environ.get("QWEN36_MLP_GATEUP_DTYPE", "bfp4") == "bfp8" else ttnn.bfloat4_b
+
+
+def _gateup_cache_tag():
+    return "" if gateup_weight_dtype() == ttnn.bfloat4_b else ".bfp8"
+
+
 def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     """Packed [gate|up] weight for all_gather_swiglu_prefill: prepare_for_fused_swiglu tile-pair
     interleave, then column-parallel shard on the 2N dim so each device holds its interleaved slice."""
@@ -33,7 +44,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     il = prepare_for_fused_swiglu(packed, ndev=tp, gate_is_first=True)  # [dim, 2*hidden]
     return ttnn.as_tensor(
         il,
-        dtype=ttnn.bfloat4_b,
+        dtype=gateup_weight_dtype(),
         device=mesh,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=-1),
         layout=ttnn.TILE_LAYOUT,
@@ -71,7 +82,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 state_dict["up_proj.weight"],
                 mesh_device,
                 tp,
-                cache("gate_up", ".swiglu"),
+                cache("gate_up", ".swiglu" + _gateup_cache_tag()),
             )
             if tpc.mlp_gateup_agmm_enabled(tp)
             else None
@@ -84,16 +95,16 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                     mesh_device,
                     dim=-1,
                     memory_config=args.mlp_w1_weight_memcfg,
-                    cache_path=cache("gate_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    cache_path=cache("gate_proj", ".dramshard" + _gateup_cache_tag()),
+                    dtype=gateup_weight_dtype(),
                 ),
                 w3=tpc.shard_w(
                     state_dict["up_proj.weight"],
                     mesh_device,
                     dim=-1,
                     memory_config=args.mlp_w3_weight_memcfg,
-                    cache_path=cache("up_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    cache_path=cache("up_proj", ".dramshard" + _gateup_cache_tag()),
+                    dtype=gateup_weight_dtype(),
                 ),
                 w2=tpc.shard_w(
                     state_dict["down_proj.weight"],
@@ -113,16 +124,16 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
                 mesh_device,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("gate_proj"),
-                dtype=ttnn.bfloat4_b,
+                cache_path=cache("gate_proj", _gateup_cache_tag()),
+                dtype=gateup_weight_dtype(),
             ),
             w3=tpc.shard_w(
                 state_dict["up_proj.weight"],
                 mesh_device,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("up_proj"),
-                dtype=ttnn.bfloat4_b,
+                cache_path=cache("up_proj", _gateup_cache_tag()),
+                dtype=gateup_weight_dtype(),
             ),
             w2=tpc.shard_w(
                 state_dict["down_proj.weight"],
@@ -286,13 +297,11 @@ class Qwen36MLP:
                 seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt
             )
             # L1 output (gate/up outputs; down output via mc_out below): +FPU, avoids the DRAM round-trip
-            # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk.
-            w1_out = ttnn.linear(
-                x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            w3_out = ttnn.linear(
-                x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
+            # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk
+            # on BH; WH takes DRAM (tpc.prefill_matmul_out_memcfg).
+            _gu_mc = tpc.prefill_matmul_out_memcfg()
+            w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=_gu_mc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=_gu_mc)
             _silu_fused = True
         else:
             # Interleaved weights: auto matmul program for decode and prefill.
@@ -332,8 +341,14 @@ class Qwen36MLP:
                 tuning=getattr(args, "prefill_tuning", None),
             )
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
-        # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial).
-        mc_w2_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned) else mc
+        # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial). On WH the
+        # tuned prefill output goes to DRAM (tpc.prefill_matmul_out_memcfg: 64-core grid -> CB clash).
+        if x.shape[-2] <= ttnn.TILE_SIZE:
+            mc_w2_out = ttnn.L1_MEMORY_CONFIG
+        elif _prefill_tuned:
+            mc_w2_out = tpc.prefill_matmul_out_memcfg()
+        else:
+            mc_w2_out = mc
         partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
         ttnn.deallocate(hidden)
 

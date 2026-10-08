@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Qwen3.5-9B config for Blackhole P150.
+"""Qwen3.5/3.6/3.8 config: 9B on Blackhole P150, 27B on P150x4/P150x8 and Wormhole T3K.
 
 Subclasses tt_transformers.ModelArgs. HF_MODEL env var is canonical (hub id or local dir);
 hub ids are snapshot_download'd first (AutoConfig on bare hub id is unreliable here).
@@ -17,7 +17,7 @@ GDN_CONV1D_L1_SMALL_SIZE = 24576
 
 
 class Qwen36ModelArgs(ModelArgs):
-    """Qwen3.5-9B ModelArgs for Blackhole P150."""
+    """Qwen3.5/3.6/3.8 ModelArgs (single-device 9B on P150; 27B TP on P150x4/x8 and T3K)."""
 
     # Opt into base ModelArgs TP > n_kv_heads path; attention/tp.py replicates via replicate_kv_weight.
     SUPPORTS_KV_REPLICATION = True
@@ -107,6 +107,11 @@ class Qwen36ModelArgs(ModelArgs):
 
         tp = self.num_devices
         self.cluster_shape = list(mesh_device.shape)
+        # DRAM bank count for the DRAM-WIDTH_SHARDED weight/matmul configs below (8 on BH, 12 on WH).
+        # Only the non-default DRAM-sharded decode path uses them; the 1D decode path is interleaved.
+        _nd = tpc.dram_cores(mesh_device)
+        _dram_memcfg = lambda k, n: tpc.create_dram_sharded_mem_config(k, n, n_dram_cores=_nd)
+        _dram_progcfg = lambda m, k, n: tpc.create_dram_sharded_matmul_program_config(m, k, n, n_dram_cores=_nd)
 
         # GDN dims (match qwen35_27b reference names).
         self.gdn_nk = self.linear_num_key_heads
@@ -141,40 +146,40 @@ class Qwen36ModelArgs(ModelArgs):
         kv_dim_per_device = self.n_local_kv_heads * self.head_dim
 
         # DRAM-sharded weights: column-parallel [hidden, out_tp]
-        self.gdn_qkvz_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.gdn_qkvz_dim_tp)
-        self.gdn_qkvzab_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.gdn_qkvzab_dim_tp)
-        self.attn_qg_weight_memcfg = tpc.create_dram_sharded_mem_config(
+        self.gdn_qkvz_weight_memcfg = _dram_memcfg(self.dim, self.gdn_qkvz_dim_tp)
+        self.gdn_qkvzab_weight_memcfg = _dram_memcfg(self.dim, self.gdn_qkvzab_dim_tp)
+        self.attn_qg_weight_memcfg = _dram_memcfg(
             self.dim, self.n_local_heads * self.head_dim * 2
         )
-        self.attn_k_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, kv_dim_per_device)
-        self.attn_v_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, kv_dim_per_device)
+        self.attn_k_weight_memcfg = _dram_memcfg(self.dim, kv_dim_per_device)
+        self.attn_v_weight_memcfg = _dram_memcfg(self.dim, kv_dim_per_device)
         # Fused [q+gate | k | v] in-projection (P4: QWEN36_FUSED_QKV) — one column-parallel matmul.
         self.attn_qkv_fused_dim_tp = self.n_local_heads * self.head_dim * 2 + 2 * kv_dim_per_device
-        self.attn_qkv_fused_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.attn_qkv_fused_dim_tp)
-        self.mlp_w1_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.hidden_dim // tp)
-        self.mlp_w3_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.hidden_dim // tp)
+        self.attn_qkv_fused_weight_memcfg = _dram_memcfg(self.dim, self.attn_qkv_fused_dim_tp)
+        self.mlp_w1_weight_memcfg = _dram_memcfg(self.dim, self.hidden_dim // tp)
+        self.mlp_w3_weight_memcfg = _dram_memcfg(self.dim, self.hidden_dim // tp)
         # row-parallel out-projections: DRAM-INTERLEAVED (None -> plain ttnn.linear); DRAM-sharding narrow-K here loses to the interleaved 1D kernel and adds 2 reshards/layer.
         self.gdn_out_weight_memcfg = None
         self.attn_wo_weight_memcfg = None
-        self.mlp_w2_weight_memcfg = tpc.create_dram_sharded_mem_config(self.hidden_dim // tp, self.dim)
+        self.mlp_w2_weight_memcfg = _dram_memcfg(self.hidden_dim // tp, self.dim)
 
         # DRAM-sharded matmul progcfgs (decode, M=1)
         M = 1
-        self.gdn_qkvz_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.gdn_qkvz_dim_tp)
-        self.gdn_qkvzab_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.gdn_qkvzab_dim_tp)
-        self.gdn_out_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.gdn_value_dim_tp, self.dim)
-        self.attn_qg_progcfg = tpc.create_dram_sharded_matmul_program_config(
+        self.gdn_qkvz_progcfg = _dram_progcfg(M, self.dim, self.gdn_qkvz_dim_tp)
+        self.gdn_qkvzab_progcfg = _dram_progcfg(M, self.dim, self.gdn_qkvzab_dim_tp)
+        self.gdn_out_progcfg = _dram_progcfg(M, self.gdn_value_dim_tp, self.dim)
+        self.attn_qg_progcfg = _dram_progcfg(
             M, self.dim, self.n_local_heads * self.head_dim * 2
         )
-        self.attn_k_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, kv_dim_per_device)
-        self.attn_v_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, kv_dim_per_device)
-        self.attn_qkv_fused_progcfg = tpc.create_dram_sharded_matmul_program_config(
+        self.attn_k_progcfg = _dram_progcfg(M, self.dim, kv_dim_per_device)
+        self.attn_v_progcfg = _dram_progcfg(M, self.dim, kv_dim_per_device)
+        self.attn_qkv_fused_progcfg = _dram_progcfg(
             M, self.dim, self.attn_qkv_fused_dim_tp
         )
-        self.attn_wo_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.attn_out_dim_tp, self.dim)
-        self.mlp_w1_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.hidden_dim // tp)
-        self.mlp_w3_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.hidden_dim // tp)
-        self.mlp_w2_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.hidden_dim // tp, self.dim)
+        self.attn_wo_progcfg = _dram_progcfg(M, self.attn_out_dim_tp, self.dim)
+        self.mlp_w1_progcfg = _dram_progcfg(M, self.dim, self.hidden_dim // tp)
+        self.mlp_w3_progcfg = _dram_progcfg(M, self.dim, self.hidden_dim // tp)
+        self.mlp_w2_progcfg = _dram_progcfg(M, self.hidden_dim // tp, self.dim)
 
         # 1D decode MLP matmuls (DEFAULT): small grids beat the ~80-core DRAM-sharded grid on the
         # bandwidth-bound skinny (M<=1) decode matmuls. Interleaved weights.
@@ -256,6 +261,22 @@ class Qwen36ModelArgs(ModelArgs):
         # trust_remote_code before base AutoConfig load.
         self.trust_remote_code_hf = True
         super()._set_hf_params(checkpoint_dir)
+
+    def is_distributed_norm(self, mode):
+        """TP prefill always runs the distributed RMSNorm.
+
+        layer.py fuses each norm's post-norm all-gather into the following in-projection
+        (all_gather_minimal_matmul_async) by constructing the norms with enable_all_gather=False.
+        DistributedNorm only honours that on the distributed path; on the non-distributed path it
+        gathers BEFORE the norm and hands the modules a full-width activation, which the fused
+        AG-matmul then rejects ("inner dimensions must match, got K=2*dim and K_w=dim"). The base
+        class picks distributed only for dim > 4096 (true for the 27B, not for 0.8B/2B/4B/9B), so
+        pin it for every TP prefill; decode keeps the framework choice (gather-then-norm)."""
+        from models.tt_transformers.tt.common import Mode
+
+        if self.num_devices > 1 and mode == Mode.PREFILL:
+            return True
+        return super().is_distributed_norm(mode)
 
     def is_full_attention_layer(self, layer_idx: int) -> bool:
         return self.attention_type_list[layer_idx] == "full_attention"

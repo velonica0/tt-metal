@@ -388,7 +388,11 @@ class TPGatedDeltaNet:
                     tuning=getattr(self.args, "prefill_tuning", None),
                 )
                 return ttnn.linear(
-                    x, weight, compute_kernel_config=self.cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    x,
+                    weight,
+                    compute_kernel_config=tpc.prefill_matmul_compute_cfg(self.cfg),  # WH: no packer L1 acc
+                    program_config=pc,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(

@@ -31,14 +31,15 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.demos.blackhole.qwen36.tests.test_factory import mesh_shape_from_env
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+# MESH_DEVICE: P150 (9B, single device), P150x4 / P150x8 / T3K (27B TP). Default (1,4).
+_MESH_SHAPE = mesh_shape_from_env(default=(1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 _TP_TRACE_REGION_SIZE = 1024 * 1024 * 1024
 DEVICE_PARAMS = [
@@ -193,7 +194,6 @@ def _blocks_for(seqlen, max_generated_tokens):
     return min(MAX_BLOCK_BUDGET, blocks)
 
 
-@run_for_blackhole()
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(

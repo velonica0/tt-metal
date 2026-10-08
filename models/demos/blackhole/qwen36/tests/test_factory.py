@@ -8,7 +8,9 @@ Centralizes what used to be copy-pasted across the per-test files:
 * ``model_path()``                 — resolve the HF model id/dir from ``HF_MODEL``
 * ``load_attn_layer`` / ``load_gdn_layer`` / ``load_mlp_layer``
                                      — dequantize one layer's weights from the
-                                       FP8 (or bf16) safetensors checkpoint
+                                       FP8 (or bf16) safetensors checkpoint, or
+                                       synthesize them from config.json alone
+                                       (``QWEN36_SYNTHETIC_WEIGHTS=1`` / no index)
 * ``compute_pcc`` / ``compare_tensors`` — single PCC implementation
 * ``get_pcc_threshold(request)``   — per-test threshold from ``pcc_thresholds.json``
 * ``parametrize_mesh_tp()``        — the env-driven (1,8)/(1,4)/(1,1) mesh + FABRIC_1D idiom
@@ -76,8 +78,88 @@ def load_layer_weights(ckpt_dir, layer_idx, names, search_prefix, out_prefix="")
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Synthetic (config-only) weights
+# --------------------------------------------------------------------------- #
+def synthetic_weights_enabled(ckpt_dir):
+    """True when the component tests should synthesize weights instead of reading safetensors:
+    ``QWEN36_SYNTHETIC_WEIGHTS=1``, or the checkpoint dir holds only config/tokenizer files (no
+    ``model.safetensors.index.json``). The TP component tests compare the device path against a
+    torch reference built from the SAME weights, so random weights of the right shapes validate
+    the sharding / kernels without the 55 GB download (e.g. bringing up a new device)."""
+    if os.environ.get("QWEN36_SYNTHETIC_WEIGHTS") == "1":
+        return True
+    return not (Path(ckpt_dir) / "model.safetensors.index.json").is_file()
+
+
+def _text_config(ckpt_dir):
+    cfg = json.load(open(Path(ckpt_dir) / "config.json"))
+    return cfg.get("text_config", cfg)
+
+
+def _synth(shape, std, seed, dtype=torch.bfloat16):
+    g = torch.Generator().manual_seed(seed)
+    return (torch.randn(*shape, generator=g) * std).to(dtype)
+
+
+def synthetic_attn_layer(ckpt_dir, layer_idx):
+    """Random full-attention weights in HF layout ([out, in]; q_proj carries the output gate)."""
+    tc = _text_config(ckpt_dir)
+    dim, nh, nkv, hd = tc["hidden_size"], tc["num_attention_heads"], tc["num_key_value_heads"], tc["head_dim"]
+    seed = 1000 + layer_idx
+    return {
+        "q_proj.weight": _synth((nh * hd * 2, dim), 0.02, seed),
+        "k_proj.weight": _synth((nkv * hd, dim), 0.02, seed + 1),
+        "v_proj.weight": _synth((nkv * hd, dim), 0.02, seed + 2),
+        "o_proj.weight": _synth((dim, nh * hd), 0.02, seed + 3),
+        # zero-centered RMSNorm weights (the loader adds +1); real checkpoints sit around 0.3-0.7
+        "q_norm.weight": _synth((hd,), 0.1, seed + 4) + 0.5,
+        "k_norm.weight": _synth((hd,), 0.1, seed + 5) + 0.5,
+    }
+
+
+def synthetic_gdn_layer(ckpt_dir, layer_idx):
+    """Random Gated-DeltaNet weights in HF layout, keyed like ``load_gdn_layer``."""
+    tc = _text_config(ckpt_dir)
+    dim = tc["hidden_size"]
+    nk, dk = tc["linear_num_key_heads"], tc["linear_key_head_dim"]
+    nv, dv = tc["linear_num_value_heads"], tc["linear_value_head_dim"]
+    ks = tc["linear_conv_kernel_dim"]
+    key_dim, value_dim = nk * dk, nv * dv
+    seed = 2000 + layer_idx
+    P = "linear_attn."
+    return {
+        P + "in_proj_qkv.weight": _synth((2 * key_dim + value_dim, dim), 0.02, seed),
+        P + "in_proj_z.weight": _synth((value_dim, dim), 0.02, seed + 1),
+        P + "in_proj_a.weight": _synth((nv, dim), 0.02, seed + 2),
+        P + "in_proj_b.weight": _synth((nv, dim), 0.02, seed + 3),
+        P + "out_proj.weight": _synth((dim, value_dim), 0.02, seed + 4),
+        P + "conv1d.weight": _synth((2 * key_dim + value_dim, 1, ks), 0.3, seed + 5),
+        # A_log ~ log(1..16) as in the HF init; dt_bias small positive
+        P + "A_log": torch.log(torch.rand(nv, generator=torch.Generator().manual_seed(seed + 6)) * 15 + 1).to(
+            torch.bfloat16
+        ),
+        P + "dt_bias": (_synth((nv,), 0.1, seed + 7).float() + 0.5).to(torch.bfloat16),
+        P + "norm.weight": _synth((dv,), 0.1, seed + 8) + 0.5,
+    }
+
+
+def synthetic_mlp_layer(ckpt_dir, layer_idx):
+    """Random SwiGLU MLP weights in HF layout."""
+    tc = _text_config(ckpt_dir)
+    dim, hidden = tc["hidden_size"], tc["intermediate_size"]
+    seed = 3000 + layer_idx
+    return {
+        "gate_proj.weight": _synth((hidden, dim), 0.02, seed),
+        "up_proj.weight": _synth((hidden, dim), 0.02, seed + 1),
+        "down_proj.weight": _synth((dim, hidden), 0.02, seed + 2),
+    }
+
+
 def load_attn_layer(ckpt_dir, layer_idx):
     """Full-attention layer weights — keys ``q_proj.weight`` … ``k_norm.weight``."""
+    if synthetic_weights_enabled(ckpt_dir):
+        return synthetic_attn_layer(ckpt_dir, layer_idx)
     return load_layer_weights(
         ckpt_dir,
         layer_idx,
@@ -88,6 +170,8 @@ def load_attn_layer(ckpt_dir, layer_idx):
 
 def load_gdn_layer(ckpt_dir, layer_idx):
     """Gated-DeltaNet layer weights — keys ``linear_attn.in_proj_qkv.weight`` …"""
+    if synthetic_weights_enabled(ckpt_dir):
+        return synthetic_gdn_layer(ckpt_dir, layer_idx)
     return load_layer_weights(
         ckpt_dir,
         layer_idx,
@@ -109,6 +193,8 @@ def load_gdn_layer(ckpt_dir, layer_idx):
 
 def load_mlp_layer(ckpt_dir, layer_idx):
     """SwiGLU MLP layer weights — keys ``gate_proj.weight``/``up_proj.weight``/``down_proj.weight``."""
+    if synthetic_weights_enabled(ckpt_dir):
+        return synthetic_mlp_layer(ckpt_dir, layer_idx)
     return load_layer_weights(
         ckpt_dir,
         layer_idx,
@@ -164,12 +250,22 @@ def get_pcc_threshold(request, default=0.99):
 # --------------------------------------------------------------------------- #
 # Mesh / device helpers
 # --------------------------------------------------------------------------- #
+# MESH_DEVICE -> mesh shape. Blackhole P150 (single) / P150x4 / P150x8, and Wormhole N300 / T3K.
+# The 27B needs TP=8 on Wormhole (12 GB DRAM per chip), i.e. the full T3K.
+MESH_SHAPES = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8), "N300": (1, 2), "T3K": (1, 8)}
+
+
+def mesh_shape_from_env(default=None):
+    """Mesh shape selected by ``MESH_DEVICE`` (see ``MESH_SHAPES``); ``default`` when unset/unknown."""
+    return MESH_SHAPES.get(os.environ.get("MESH_DEVICE"), default)
+
+
 def _resolve_mesh_shape(max_tp=8):
     # MESH_DEVICE wins outright. The device-count fallback is computed lazily (not as a
     # ``dict.get`` default, which Python evaluates eagerly) so an explicit MESH_DEVICE never
     # touches ttnn.get_device_ids() -- that call raises on clusters whose ClusterType lookup
     # fails, which would otherwise break collection even for a fully-specified mesh.
-    shape = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"))
+    shape = mesh_shape_from_env()
     if shape is not None:
         return shape
     return (1, min(len(ttnn.get_device_ids()), max_tp))
@@ -179,7 +275,8 @@ def parametrize_mesh_tp(max_tp=8):
     """Parametrize a TP test over the env-selected mesh shape + FABRIC_1D.
 
     Mirrors the idiom the qwen TP tests used inline: ``MESH_DEVICE=P150`` -> (1,1),
-    ``P150x4`` -> (1,4), ``P150x8`` -> (1,8); otherwise (1, min(num_devices, max_tp)).
+    ``P150x4`` -> (1,4), ``P150x8``/``T3K`` -> (1,8), ``N300`` -> (1,2); otherwise
+    (1, min(num_devices, max_tp)).
     The mesh shape
     gets an explicit ``RxC`` id so node names (and ``pcc_thresholds.json`` mesh
     keys) are readable.

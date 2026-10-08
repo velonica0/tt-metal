@@ -118,6 +118,34 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     return tw
 
 
+
+def _buffer_addr(t):
+    try:
+        return t.buffer_address()
+    except Exception:
+        return None
+
+
+def _free_distinct(tensors, keep=()):
+    """Deallocate each distinct buffer among ``tensors`` once, skipping any that alias a ``keep``
+    tensor (still to be read).
+
+    ttnn.slice / ttnn.pad / to_memory_config return the INPUT tensor when they are no-ops (a
+    full-range slice, padding to the tile-padded shape, an already-matching memory config), so a
+    chain like ``k_h = slice(k); k_hp = pad(k_h)`` can leave k_h, k_hp and k sharing one buffer.
+    Deallocating an alias frees the original while it is still needed, and the next allocation
+    reuses its L1 (observed: V cache filled with K data at B=32 on WH). Addresses are taken before
+    anything is freed so aliases are recognised after the first free."""
+    keep_addrs = {a for a in (_buffer_addr(x) for x in keep) if a is not None}
+    addrs = [_buffer_addr(t) for t in tensors]  # before any free: an alias's address stays readable
+    freed = set()
+    for t, a in zip(tensors, addrs):
+        if a is None or a in keep_addrs or a in freed:
+            continue
+        freed.add(a)
+        ttnn.deallocate(t)
+
+
 class TPAttention:
     """Standalone TP full-attention with internal per-head KV caches (decode)."""
 
@@ -230,7 +258,7 @@ class TPAttention:
             if x.shape[-2] > tpc.TILE_SIZE:
                 # Prefill: FPU-tuned 2D config beats ttnn-auto's 1x1 stall; L1 output (gated stays DRAM)
                 # feeds the separate RS. max_cols = device width (11 on BH): wide grid (~10-wide) + the
-                # existing L1-out. See test_mlp_matmul_sweep_prefill.
+                # existing L1-out. See test_mlp_matmul_sweep_prefill. WH: DRAM out (prefill_matmul_out_memcfg).
                 pc = tpc.create_prefill_mlp_matmul_program_config(
                     x.shape[-2],
                     weight.shape[-2],
@@ -241,9 +269,10 @@ class TPAttention:
                 return ttnn.linear(
                     x,
                     weight,
-                    compute_kernel_config=self.compute_cfg,
+                    # WH: no packer L1 acc on this 2D-mcast config (kernel-exit desync hang, see tpc)
+                    compute_kernel_config=tpc.prefill_matmul_compute_cfg(self.compute_cfg),
                     program_config=pc,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=tpc.prefill_matmul_out_memcfg(),
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
@@ -570,15 +599,15 @@ class TPAttention:
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
             keys, values = self.paged_k, self.paged_v
+            # NKV==1 (TP=8): k/v are already tile-padded to 32 heads, so ttnn.pad is a no-op that
+            # returns k/v themselves. Freeing k before k_p is consumed would hand k's L1 to the next
+            # allocation (k_sh) while v_p is still read -> V cache gets K data (seen at B=32 on WH).
             k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
             v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-            ttnn.deallocate(k)
-            ttnn.deallocate(v)
             _kv_cfg = self._kv_shard_cfg(B)
             k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
             v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
-            ttnn.deallocate(k_p)
-            ttnn.deallocate(v_p)
+            _free_distinct((k_p, v_p, k, v), keep=(k_sh, v_sh))
             # paged_update_cache takes bf16/fp32 and casts to bf8 cache; decode K/V stay bf16 (prefill fill needs bf8)
             ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
             ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
@@ -600,17 +629,17 @@ class TPAttention:
         else:
             # Internal per-head KV caches; pad NKV head dim to 32 for tile-aligned update
             for h in range(NKV):
+                # NKV==1: the full-range slice returns k/v themselves and the pad is a no-op on the
+                # tile-padded head dim, so k_h/k_hp alias k. Free the temporaries only once k_sh/v_sh
+                # (real copies) exist, and never free an alias of k/v inside the loop.
                 k_h = ttnn.slice(k, (0, 0, h, 0), (1, B, h + 1, HD))
                 v_h = ttnn.slice(v, (0, 0, h, 0), (1, B, h + 1, HD))
                 k_hp = ttnn.pad(k_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
                 v_hp = ttnn.pad(v_h, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
-                ttnn.deallocate(k_h)
-                ttnn.deallocate(v_h)
                 _kv_cfg = self._kv_shard_cfg(B)
                 k_sh = ttnn.to_memory_config(k_hp, _kv_cfg)
                 v_sh = ttnn.to_memory_config(v_hp, _kv_cfg)
-                ttnn.deallocate(k_hp)
-                ttnn.deallocate(v_hp)
+                _free_distinct((k_hp, v_hp, k_h, v_h), keep=(k, v, k_sh, v_sh))
                 ttnn.experimental.paged_update_cache(self.k_caches[h], k_sh, update_idxs_tensor=cur_pos_tt)
                 ttnn.experimental.paged_update_cache(self.v_caches[h], v_sh, update_idxs_tensor=cur_pos_tt)
                 ttnn.deallocate(k_sh)
